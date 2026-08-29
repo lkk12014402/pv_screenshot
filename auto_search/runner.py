@@ -7,7 +7,7 @@ import time
 
 from playwright.async_api import async_playwright
 
-from .browser import launch_browser, new_context
+from .browser import ensure_browsers_path, launch_browser, new_context
 from .config import AppConfig
 from .sites import SITES
 from .utils import get_logger
@@ -25,6 +25,7 @@ TRANSIENT_RE = re.compile(
 
 async def run(cfg: AppConfig) -> int:
     logger = get_logger("auto_search")
+    ensure_browsers_path(logger)
     async with async_playwright() as pw:
         browser = await launch_browser(pw, cfg, logger)
         ok = True
@@ -66,7 +67,8 @@ async def _run_task(browser, cfg: AppConfig, task, logger) -> bool:
             flow_page = await site.open_database(
                 page, task.database, tlog, category=task.category)
             flow = site.flows[task.database]()
-            await flow.run(flow_page, task, outdir, tlog)
+            await flow.run(flow_page, task, outdir, tlog,
+                           headless=cfg.browser.headless)
             tlog.info("任务完成: %s", task_name)
             return True
         except Exception as e:  # noqa: BLE001 - 单个任务失败不阻塞其余任务

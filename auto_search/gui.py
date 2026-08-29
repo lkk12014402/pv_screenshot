@@ -31,7 +31,7 @@ def build_raw_config(base_raw: dict, v: dict) -> dict:
     acc.update(username=v["username"], password=v["password"])
     raw["account"] = acc
     br = dict(raw.get("browser") or {})
-    br.update(headless=v["headless"], channel=v["channel"])
+    br.update(headless=v["headless"], channel=v["channel"], slow_mo=v["slow_mo"])
     raw["browser"] = br
     raw["output_dir"] = v["output_dir"]
 
@@ -50,6 +50,7 @@ def build_raw_config(base_raw: dict, v: dict) -> dict:
         },
         per_page=v["per_page"],
         max_pages=v["max_pages"],
+        screenshot={"enabled": v["screenshot_enabled"]},
         print_pdf={
             "enabled": v["pdf_enabled"],
             "header_footer": v["pdf_header_footer"],
@@ -103,6 +104,7 @@ class App:
         df0 = task0.get("date_filter") or {}
         pp0 = task0.get("print_pdf") or {}
         ex0 = task0.get("export_csv") or {}
+        ss0 = task0.get("screenshot") or {}
         acc0 = self.base_raw.get("account") or {}
         br0 = self.base_raw.get("browser") or {}
 
@@ -176,11 +178,17 @@ class App:
                                       width=9, state="readonly")
         self.v_channel.pack(side="left")
         self.v_channel.set(str(br0.get("channel", "msedge")))
+        ttk.Label(opt_frame, text="动作间隔ms").pack(side="left", padx=(12, 2))
+        self.v_slowmo = ttk.Entry(opt_frame, width=6)
+        self.v_slowmo.pack(side="left")
+        self.v_slowmo.insert(0, str(br0.get("slow_mo", 0)))
         label("运行方式", row); opt_frame.grid(row=row, column=1, sticky="w", pady=2); row += 1
 
         act_frame = ttk.Frame(main)
+        self.v_shot = tk.BooleanVar(value=bool(ss0.get("enabled", True)))
+        ttk.Checkbutton(act_frame, text="结果页整页截图", variable=self.v_shot).pack(side="left")
         self.v_pdf = tk.BooleanVar(value=bool(pp0.get("enabled", True)))
-        ttk.Checkbutton(act_frame, text="逐页打印 PDF", variable=self.v_pdf).pack(side="left")
+        ttk.Checkbutton(act_frame, text="逐页打印 PDF", variable=self.v_pdf).pack(side="left", padx=(10, 0))
         self.v_pdf_hf = tk.BooleanVar(value=bool(pp0.get("header_footer", True)))
         ttk.Checkbutton(act_frame, text="PDF 页眉页脚", variable=self.v_pdf_hf).pack(side="left", padx=(10, 0))
         self.v_csv = tk.BooleanVar(value=bool(ex0.get("enabled", True)))
@@ -240,10 +248,12 @@ class App:
             "output_dir": self.v_outdir.get().strip() or "./output",
             "headless": self.v_headless.get(),
             "channel": self.v_channel.get(),
+            "slow_mo": int(self.v_slowmo.get() or 0),
             "pdf_enabled": self.v_pdf.get(),
             "pdf_header_footer": self.v_pdf_hf.get(),
             "pdf_format": str((self.base_raw.get("tasks") or [{}])[0].get("print_pdf", {}).get("paper_format", "Letter")),
             "pdf_scale": float((self.base_raw.get("tasks") or [{}])[0].get("print_pdf", {}).get("scale", 1.0)),
+            "screenshot_enabled": self.v_shot.get(),
             "csv_enabled": self.v_csv.get(),
             "csv_fields_by": self.v_fields_by.get(),
             "csv_fields": [l.strip() for l in self.v_fields.get("1.0", "end").splitlines() if l.strip()],
@@ -259,11 +269,6 @@ class App:
         except (ConfigError, ValueError) as e:
             messagebox.showerror("配置有误", str(e))
             return
-        if not cfg.browser.headless and cfg.tasks[0].print_pdf.enabled:
-            if not messagebox.askokcancel(
-                    "提示", "显示浏览器窗口运行时无法导出 PDF，本次运行将自动跳过 PDF 导出。\n仍要继续吗？"):
-                return
-            cfg.tasks[0].print_pdf.enabled = False
         self.btn_run.state(["disabled"])
         self.v_status.config(text="运行中…")
         self._log("===== 开始运行 =====")

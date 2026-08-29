@@ -116,7 +116,7 @@ class EmbaseFlow(Flow):
     name = "embase"
 
     async def run(self, page: Page, task: TaskConfig, outdir: Path,
-                  logger: logging.Logger) -> None:
+                  logger: logging.Logger, headless: bool = True) -> None:
         try:
             await self._check_cloudflare_block(page, logger)
             await self._accept_cookies(page, logger)
@@ -128,16 +128,28 @@ class EmbaseFlow(Flow):
                 await self._dismiss_overlays(page, logger)
             await self._set_per_page(page, task.per_page, logger)
 
+            # 结果页整页截图（已应用检索式+日期过滤+每页条数）
+            if task.screenshot.enabled:
+                await self._screenshot_results(page, outdir, logger)
+
+            has_results = await self._has_results(page)
             _cur, total_pages = await self._pagination_info(page)
             if task.max_pages > 0:
                 total_pages = min(total_pages, task.max_pages)
-            logger.info("检索结果共 %d 页", total_pages)
 
+            if not has_results:
+                # 检索结果为空：只打印结果页 PDF，跳过 CSV 导出
+                logger.info("检索结果为空: 仅打印结果页 PDF，跳过 CSV 导出")
+                if task.print_pdf.enabled:
+                    await self._print_page(page, task, outdir / "pdf", 1, logger, headless)
+                return
+
+            logger.info("检索结果共 %d 页", total_pages)
             if task.print_pdf.enabled:
                 await self._goto_first_page(page, logger)
                 await self._iterate_pages(
                     page, total_pages,
-                    lambda p, i: self._print_page(p, task, outdir / "pdf", i, logger),
+                    lambda p, i: self._print_page(p, task, outdir / "pdf", i, logger, headless),
                     logger, "打印PDF",
                 )
             if task.export_csv.enabled:
@@ -152,6 +164,30 @@ class EmbaseFlow(Flow):
         except Exception:
             await dump_debug(page, outdir, "error", logger)
             raise
+
+    async def _has_results(self, page: Page) -> bool:
+        """判断是否有检索结果（分页栏存在或结果列表有条目）。"""
+        try:
+            if await page.locator(S.PAGINATION).first.count() > 0:
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            n = await page.locator('[data-testid="results-list"] [data-testid="title"]').count()
+            return n > 0
+        except Exception:  # noqa: BLE001
+            return False
+
+    async def _screenshot_results(self, page: Page, outdir: Path,
+                                  logger: logging.Logger) -> None:
+        """整页截图当前结果页(full_page)。条目多时图片会很长很大，属正常。"""
+        path = outdir / "screenshot_results.png"
+        try:
+            await page.evaluate("window.scrollTo(0, 0)")
+            await page.screenshot(path=str(path), full_page=True)
+            logger.info("已保存结果页整页截图: %s", path)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("结果页截图失败(%s)，继续后续步骤", e)
 
     # ---------------- 检索与过滤 ----------------
 
@@ -445,7 +481,7 @@ class EmbaseFlow(Flow):
     # ---------------- 打印 PDF ----------------
 
     async def _print_page(self, page: Page, task: TaskConfig, pdf_dir: Path,
-                          idx: int, logger: logging.Logger) -> None:
+                          idx: int, logger: logging.Logger, headless: bool = True) -> None:
         pdf_dir.mkdir(parents=True, exist_ok=True)
         path = pdf_dir / f"page_{idx:03d}.pdf"
         await page.evaluate("window.scrollTo(0, 0)")
@@ -462,16 +498,85 @@ class EmbaseFlow(Flow):
                 footer_template=FOOTER_TPL,
                 margin={"top": "1.5cm", "bottom": "1.5cm", "left": "1.2cm", "right": "1.2cm"},
             )
-        try:
+        if headless:
             await page.pdf(**kwargs)
-        except Exception as e:  # noqa: BLE001
-            if "headless" in str(e).lower():
-                raise RuntimeError(
-                    "导出 PDF 需要无头模式(headless: true)。请在配置中开启 headless，"
-                    "或将 print_pdf.enabled 设为 false。"
-                ) from e
-            raise
+        else:
+            await self._print_headed(page, path, task, logger)
         logger.info("已保存 %s", path)
+
+    async def _print_headed(self, page: Page, path: Path, task: TaskConfig,
+                            logger: logging.Logger) -> None:
+        """有头模式下打印 PDF（page.pdf 仅支持无头 Chromium）。
+
+        方式1: 直接发 CDP Page.printToPDF(新版 Chromium 有头模式部分支持)；
+        方式2(兜底): 把渲染好的整页 DOM 克隆到临时无头浏览器里再打印。
+        """
+        import base64
+
+        # ---- 方式1: CDP 直接打印 ----
+        try:
+            session = await page.context.new_cdp_session(page)
+            params: dict = {
+                "printBackground": True,
+                "scale": task.print_pdf.scale,
+                "preferCSSPageSize": False,
+            }
+            # 纸张尺寸(英寸): Letter=8.5x11, A4=8.27x11.69
+            if task.print_pdf.paper_format.upper() == "A4":
+                params.update(paperWidth=8.27, paperHeight=11.69)
+            else:
+                params.update(paperWidth=8.5, paperHeight=11.0)
+            if task.print_pdf.header_footer:
+                params.update(
+                    displayHeaderFooter=True,
+                    headerTemplate=HEADER_TPL,
+                    footerTemplate=FOOTER_TPL,
+                    marginTop=0.59, marginBottom=0.59, marginLeft=0.47, marginRight=0.47,
+                )
+            resp = await asyncio.wait_for(session.send("Page.printToPDF", params), timeout=60)
+            path.write_bytes(base64.b64decode(resp["data"]))
+            return
+        except Exception as e:  # noqa: BLE001
+            logger.info("有头模式 CDP 直接打印不可用(%s)，改用无头克隆打印", e)
+
+        # ---- 方式2: 克隆当前页面到临时无头浏览器打印 ----
+        html = await page.content()
+        if "<base" not in html.lower():  # 让相对/绝对路径资源按原站(VPN域名)加载
+            html = html.replace("<head>", f'<head><base href="{page.url}">', 1)
+        src_browser = page.context.browser
+        clone_browser = await src_browser.browser_type.launch(headless=True)
+        try:
+            clone_ctx = await clone_browser.new_context(
+                ignore_https_errors=True,
+                viewport={"width": 1600, "height": 900},
+                user_agent=await page.evaluate("navigator.userAgent"),
+            )
+            try:
+                await clone_ctx.add_cookies(await page.context.cookies())
+            except Exception:  # noqa: BLE001
+                pass
+            cp = await clone_ctx.new_page()
+            await cp.set_content(html, wait_until="load", timeout=60000)
+            try:
+                await cp.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:  # noqa: BLE001
+                pass
+            kwargs: dict = {
+                "path": str(path),
+                "print_background": True,
+                "format": task.print_pdf.paper_format,
+                "scale": task.print_pdf.scale,
+            }
+            if task.print_pdf.header_footer:
+                kwargs.update(
+                    display_header_footer=True,
+                    header_template=HEADER_TPL,
+                    footer_template=FOOTER_TPL,
+                    margin={"top": "1.5cm", "bottom": "1.5cm", "left": "1.2cm", "right": "1.2cm"},
+                )
+            await cp.pdf(**kwargs)
+        finally:
+            await clone_browser.close()
 
     # ---------------- 导出 CSV ----------------
 

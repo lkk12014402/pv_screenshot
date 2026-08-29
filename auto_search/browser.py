@@ -3,10 +3,28 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
+from pathlib import Path
 
 from playwright.async_api import Browser, BrowserContext
 
 from .config import AppConfig
+
+
+def ensure_browsers_path(logger: logging.Logger | None = None) -> None:
+    """打包成 exe 后，playwright 默认会在解包临时目录里找浏览器(必然找不到)。
+
+    冻结模式下把 PLAYWRIGHT_BROWSERS_PATH 固定到 exe 同目录的 ms-playwright，
+    用户只需把浏览器文件放该目录(或预先设置同名环境变量)。源码运行则保持默认。
+    """
+    if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+        return
+    if getattr(sys, "frozen", False):
+        p = Path(sys.executable).resolve().parent / "ms-playwright"
+        p.mkdir(exist_ok=True)
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(p)
+        if logger:
+            logger.info("exe 模式: 内置浏览器目录为 %s", p)
 
 
 def _proxy_from_env() -> dict[str, str] | None:
@@ -39,7 +57,18 @@ async def launch_browser(pw, cfg: AppConfig, logger: logging.Logger) -> Browser:
         return await pw.chromium.launch(channel="chromium", **kwargs)
     except Exception as e:  # noqa: BLE001
         logger.warning("channel=%s 启动失败(%s)，回退到内置 Chromium headless shell", channel, e)
-        return await pw.chromium.launch(**kwargs)
+        try:
+            return await pw.chromium.launch(**kwargs)
+        except Exception as e2:  # noqa: BLE001
+            if "Executable doesn't exist" in str(e2):
+                raise RuntimeError(
+                    "未找到可用的浏览器。请二选一：\n"
+                    "1) config.yaml 的 browser.channel 设为 msedge 或 chrome（用系统已装浏览器，推荐）；\n"
+                    "2) 使用内置浏览器：源码运行执行 `playwright install chromium`；"
+                    "exe 运行则把浏览器文件放到 exe 同目录的 ms-playwright 文件夹"
+                    "（可在已安装过的机器上复制该文件夹过来）。"
+                ) from e2
+            raise
 
 
 async def new_context(browser: Browser, cfg: AppConfig) -> BrowserContext:

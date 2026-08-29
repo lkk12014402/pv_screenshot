@@ -37,5 +37,5 @@ class Flow(ABC):
 
     @abstractmethod
     async def run(self, page: Page, task: "TaskConfig", outdir: Path,
-                  logger: logging.Logger) -> None:
-        """在数据库页面上执行完整任务。"""
+                  logger: logging.Logger, headless: bool = True) -> None:
+        """在数据库页面上执行完整任务。headless 指示当前浏览器是否无头(影响 PDF 打印方式)。"""

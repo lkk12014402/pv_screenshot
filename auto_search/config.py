@@ -27,6 +27,7 @@ account:
 browser:
   headless: true        # true=无头后台运行(可导出PDF); false=显示浏览器窗口
   channel: msedge       # 使用系统浏览器: msedge / chrome; 填 chromium 则用内置浏览器
+  slow_mo: 0            # 每个操作(点击/输入)之间的间隔毫秒数, 有头观察时可设 300~800
   # user_agent: ""      # 高级选项: 自定义 UA，一般留空即可
   # locale: zh-CN
   # timezone: Asia/Shanghai
@@ -53,6 +54,10 @@ tasks:
 
     per_page: 200                 # 每页显示条数 (Display: N results per page)
     max_pages: 0                  # 最多处理多少页, 0=全部
+
+    # 检索结果页整页截图（应用日期过滤后截取）
+    screenshot:
+      enabled: true
 
     # 逐页打印 PDF（等价于浏览器“打印-另存为PDF”，含页眉页脚设置）
     print_pdf:
@@ -110,6 +115,11 @@ class PrintPdfConfig:
 
 
 @dataclass
+class ScreenshotConfig:
+    enabled: bool = True  # 检索结果页整页截图
+
+
+@dataclass
 class ExportCsvConfig:
     enabled: bool = True
     fields_by: str = "column"  # column / row
@@ -126,6 +136,7 @@ class TaskConfig:
     date_filter: DateFilterConfig = field(default_factory=DateFilterConfig)
     per_page: int = 200
     max_pages: int = 0  # 0 = 全部页
+    screenshot: ScreenshotConfig = field(default_factory=ScreenshotConfig)
     print_pdf: PrintPdfConfig = field(default_factory=PrintPdfConfig)
     export_csv: ExportCsvConfig = field(default_factory=ExportCsvConfig)
 
@@ -195,6 +206,9 @@ def _parse_task(raw, idx: int) -> TaskConfig:
         date_filter=df,
         per_page=int(raw.get("per_page", 200)),
         max_pages=int(raw.get("max_pages", 0)),
+        screenshot=ScreenshotConfig(
+            enabled=bool(_expect_mapping(raw.get("screenshot") or {}, f"{where}.screenshot").get("enabled", True)),
+        ),
         print_pdf=pp,
         export_csv=ex,
     )

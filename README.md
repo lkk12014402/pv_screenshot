@@ -42,10 +42,12 @@ auto_search.exe --cli --ask        # 手动输入账号密码
 说明：
 
 - 默认调用 Windows 自带的 **Edge** 浏览器（`channel: msedge`），无需额外下载浏览器。
-- **无头运行**（默认）：不弹出浏览器窗口，全程后台执行。
-- **取消勾选「无头运行」**（或命令行加 `--headed`）：会弹出真实浏览器窗口，可以**全程观察
-  自动操作的过程**（登录、输入检索式、设置日期、翻页、导出等）。注意：此模式下无法导出
-  PDF（Chromium 限制），运行时若勾选了 PDF 会提示并自动跳过；CSV 导出不受影响。
+- **无头运行**（默认勾选）：不弹出浏览器窗口，全程后台执行。
+- **取消勾选「无头运行」**（或命令行加 `--headed`）：弹出真实浏览器窗口，可全程观察
+  自动操作。观察时如果嫌动作太快，把「动作间隔ms」（`browser.slow_mo`）设成
+  300~800，每次点击/输入之间就会有明显停顿。此模式下打印 PDF 也是支持的
+  （先尝试 CDP 直接打印，不支持则把页面克隆到临时无头浏览器里打印），CSV 导出同样
+  可用。如果无头模式总被网站风控拦截，直接用有头模式跑即可，功能完全一致。
 - 账号密码不想写进文件：设置环境变量 `AUTOSEARCH_USERNAME` / `AUTOSEARCH_PASSWORD`，
   或命令行加 `--ask` 手动输入。
 
@@ -77,6 +79,9 @@ tasks:                     # 可配多个任务，按顺序执行
     per_page: 200          # 每页显示条数
     max_pages: 0           # 最多处理页数，0=全部
 
+    screenshot:            # 检索结果页整页截图(应用日期过滤后)，保存为 screenshot_results.png
+      enabled: true        # 条目多时图片会很长很大，属正常；不需要可设 false
+
     print_pdf:             # 逐页打印为 PDF（含页眉页脚）
       enabled: true
       header_footer: true
@@ -99,6 +104,7 @@ tasks:                     # 可配多个任务，按顺序执行
 ```
 output/
 └── embase_demo_20260829_123000/     # 任务名_时间戳
+    ├── screenshot_results.png       # 结果页整页截图(可在配置中关闭)
     ├── pdf/page_001.pdf ...         # 逐页打印结果
     ├── csv/page_001.csv ...         # 逐页导出结果
     ├── csv/export_all.csv           # 合并后的完整 CSV
@@ -115,14 +121,31 @@ python main.py                     # 图形界面
 python main.py --cli               # 纯命令行，按 config.yaml 运行
 ```
 
-## 四、打包 exe（在 Windows 上执行）
+## 四、打包 exe（**必须在 Windows 上执行**）
 
 ```
 build_exe.bat
 ```
 
-生成的 `dist\auto_search.exe` 为单文件（约几十 MB，含 Python 运行时和 playwright
-驱动；浏览器使用系统 Edge，不打包进 exe）。
+如果 .bat 运行不了，直接用 Python 版（等价）：
+
+```
+python build_exe.py
+```
+
+PyInstaller 不支持跨平台打包：在 Linux/macOS 上只能产出对应平台的程序，产不出
+Windows exe。请在目标 Windows 机器（装好 Python 3.10+，勾选 Add to PATH）上运行
+`build_exe.bat`，生成的 `dist\auto_search.exe` 为单文件（含 Python 运行时和
+playwright 驱动；浏览器默认用系统 Edge，不打包进 exe）。
+
+关于内置浏览器（仅当你要用 `channel: chromium` 时）：
+
+- exe 模式下程序会在 **exe 同目录的 `ms-playwright` 文件夹**找内置浏览器。
+- 获取方式：在任意装好环境的机器上执行
+  `set PLAYWRIGHT_BROWSERS_PATH=<exe目录>\ms-playwright` 然后
+  `python -m playwright install chromium`，或直接把别的机器上
+  `%USERPROFILE%\AppData\Local\ms-playwright` 下的 `chromium-*` 文件夹复制过来。
+- 默认 `channel: msedge` 完全不需要这些，推荐保持默认。
 
 ## 五、常见问题
 
@@ -136,7 +159,12 @@ build_exe.bat
   （`task_retries` 配置）。频繁出现就说明平台在维护，换个时间段再跑。
 - **Cloudflare 拦截页(Sorry, you have been blocked)**：embase.com 对无头浏览器/异常
   流量的风控。程序已内置反检测（完整版浏览器、真实 UA、屏蔽 webdriver 特征）并会自动
-  刷新重试一次；仍被拦就稍等重跑，或改用真实浏览器 channel(msedge/chrome)。
+  刷新重试一次；仍被拦就稍等重跑，或改用真实浏览器 channel(msedge/chrome)，
+  或直接取消无头用有头模式跑（功能无差别）。
+- **无头(headless)与有头的风控差异**：无头不是"避免"风控的手段，反而是风控的重点
+  检测对象——无头浏览器在 WebGL/GPU、插件列表等方面与真实浏览器有差异。有头模式
+  和日常使用的浏览器几乎无差别，最容易过风控；代价是会弹窗、占用桌面。
+- **检索结果为空**：程序只打印结果页 PDF（和截图），自动跳过 CSV 导出，不会报错。
 - **网页改版导致找不到按钮**：选择器集中在 `auto_search/sites/embase.py` 顶部的
   `class S` 和 `chaoslib.py` 中，对照 `_debug/` 里的快照调整即可。
 - **WebVPN 会话超时**：检索结果特别多（几百页）时，长时间运行可能掉线，建议用

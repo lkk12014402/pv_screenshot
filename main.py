@@ -60,6 +60,9 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\n已被用户取消。")
         return 130
+    except Exception as e:  # noqa: BLE001 - exe 场景给用户友好报错而非堆栈
+        print(f"运行出错: {e}")
+        return 1
 
 
 if __name__ == "__main__":
