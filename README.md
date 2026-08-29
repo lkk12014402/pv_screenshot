@@ -22,27 +22,32 @@ Windows 单文件 exe。
 
 ## 一、直接运行 exe（Windows 用户）
 
-1. 把 `auto_search.exe` 放到任意目录，双击运行一次，会在同目录生成 `config.yaml` 模板。
-2. 用记事本编辑 `config.yaml`：填账号密码、检索式、日期范围、输出目录等。
-3. 再次双击运行。输出在 `config.yaml` 里 `output_dir` 指定的目录中。
+1. 把 `auto_search.exe` 放到任意目录，**双击运行会打开图形界面**（首次运行会在同目录生成
+   `config.yaml` 作为默认配置）。
+2. 界面上填写/修改：账号密码、检索式、日期范围、每页条数、输出目录、导出字段等。
+   - 界面里的值**只对本次运行生效**；`config.yaml` 始终保留为默认配置。
+   - 点「保存为默认配置」可把当前界面值写回 `config.yaml`（会丢失原文件中的注释）。
+3. 点「开始运行」，日志会显示在界面下方；完成后到输出目录查看结果。
+
+命令行模式（完全按 config.yaml 运行，支持多任务）：
+
+```
+auto_search.exe --cli              # 使用同目录 config.yaml
+auto_search.exe --cli -c my.yaml   # 指定配置文件
+auto_search.exe --cli -o D:\结果   # 覆盖输出目录
+auto_search.exe --cli --headed     # 显示浏览器窗口
+auto_search.exe --cli --ask        # 手动输入账号密码
+```
 
 说明：
 
 - 默认调用 Windows 自带的 **Edge** 浏览器（`channel: msedge`），无需额外下载浏览器。
-- 默认**无头运行**（不弹出浏览器窗口）。想看过程可在 config.yaml 设 `headless: false`
-  或加命令行参数 `--headed`；注意：**导出 PDF 需要无头模式**。
+- **无头运行**（默认）：不弹出浏览器窗口，全程后台执行。
+- **取消勾选「无头运行」**（或命令行加 `--headed`）：会弹出真实浏览器窗口，可以**全程观察
+  自动操作的过程**（登录、输入检索式、设置日期、翻页、导出等）。注意：此模式下无法导出
+  PDF（Chromium 限制），运行时若勾选了 PDF 会提示并自动跳过；CSV 导出不受影响。
 - 账号密码不想写进文件：设置环境变量 `AUTOSEARCH_USERNAME` / `AUTOSEARCH_PASSWORD`，
-  或在命令行运行 `auto_search.exe --ask` 手动输入。
-
-命令行参数（在 exe 所在目录打开 PowerShell/CMD）：
-
-```
-auto_search.exe                # 使用同目录 config.yaml
-auto_search.exe -c my.yaml     # 指定配置文件
-auto_search.exe -o D:\结果     # 覆盖输出目录
-auto_search.exe --headed       # 显示浏览器窗口
-auto_search.exe --ask          # 手动输入账号密码
-```
+  或命令行加 `--ask` 手动输入。
 
 ## 二、配置文件说明（config.yaml）
 
@@ -106,7 +111,8 @@ output/
 pip install -r requirements.txt
 playwright install chromium        # 如果不用系统 Edge/Chrome
 cp config.example.yaml config.yaml # 编辑后运行
-python main.py
+python main.py                     # 图形界面
+python main.py --cli               # 纯命令行，按 config.yaml 运行
 ```
 
 ## 四、打包 exe（在 Windows 上执行）
@@ -125,9 +131,17 @@ build_exe.bat
 - **提示“账号已在其他设备登录”**：这是 WebVPN 的单点登录限制（同一账号同时只允许
   一处在线，上一次运行或你浏览器里登录的会话可能还没过期）。程序会自动点击
   “强制登录/强制下线”踢掉旧会话继续运行；注意这会把你正在用的浏览器登录态踢下线。
+- **进入数据库时 504 Gateway Timeout**：WebVPN 中转网关偶发的上游超时（服务端问题），
+  程序会自动重试 5 次（间隔递增），仍失败则整个任务 60 秒后再重试一次
+  （`task_retries` 配置）。频繁出现就说明平台在维护，换个时间段再跑。
+- **Cloudflare 拦截页(Sorry, you have been blocked)**：embase.com 对无头浏览器/异常
+  流量的风控。程序已内置反检测（完整版浏览器、真实 UA、屏蔽 webdriver 特征）并会自动
+  刷新重试一次；仍被拦就稍等重跑，或改用真实浏览器 channel(msedge/chrome)。
 - **网页改版导致找不到按钮**：选择器集中在 `auto_search/sites/embase.py` 顶部的
   `class S` 和 `chaoslib.py` 中，对照 `_debug/` 里的快照调整即可。
 - **WebVPN 会话超时**：检索结果特别多（几百页）时，长时间运行可能掉线，建议用
   `max_pages` 分批执行。
 - **导出字段没勾上**：`fields` 里的名字必须和网页对话框中的文字完全一致；日志会
   列出对话框里所有可用字段名，照着改即可。
+- **导出格式**：Embase 导出对话框默认是 RIS 格式，程序会自动切换为 CSV 再勾选字段，
+  无需手动干预。

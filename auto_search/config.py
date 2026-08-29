@@ -34,6 +34,9 @@ browser:
 # 输出根目录（每个任务会在下面创建一个带时间戳的子目录）
 output_dir: "./output"
 
+# 任务失败后的整体重试次数（仅对网关超时等疑似临时网络问题生效，每次间隔 60 秒）
+task_retries: 1
+
 # ================= 任务列表（可配置多个，按顺序执行） =================
 tasks:
   - name: embase_demo             # 任务名，用于输出子目录命名
@@ -133,6 +136,7 @@ class AppConfig:
     browser: BrowserConfig
     output_dir: Path
     tasks: list[TaskConfig]
+    task_retries: int = 1  # 任务失败后整体重试次数（仅对疑似临时网络问题生效）
 
 
 def _expect_mapping(value, where: str) -> dict:
@@ -203,17 +207,12 @@ def _parse_task(raw, idx: int) -> TaskConfig:
     return task
 
 
-def load_config(path: Path, output_dir: str | None = None,
-                force_headed: bool = False, ask: bool = False) -> AppConfig:
-    """读取 config.yaml，应用环境变量/命令行覆盖，并做合法性校验。
+def parse_raw_config(raw: dict, base_path: Path, prompt: bool = True) -> AppConfig:
+    """把已解析的 YAML dict 变成 AppConfig（含环境变量覆盖与校验）。
 
-    优先级（高到低）: 命令行参数 > 环境变量 > 配置文件。
+    prompt=True 时，缺账号密码会在命令行询问；GUI 场景传 False，直接报错提示填写。
     环境变量: AUTOSEARCH_USERNAME / AUTOSEARCH_PASSWORD / AUTOSEARCH_OUTPUT_DIR / AUTOSEARCH_HEADLESS
     """
-    try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except yaml.YAMLError as e:
-        raise ConfigError(f"YAML 解析失败: {e}") from e
     raw = _expect_mapping(raw or {}, "配置文件根节点")
 
     acc_raw = _expect_mapping(raw.get("account") or {}, "account")
@@ -223,10 +222,13 @@ def load_config(path: Path, output_dir: str | None = None,
     )
     account.username = os.environ.get("AUTOSEARCH_USERNAME", account.username).strip()
     account.password = os.environ.get("AUTOSEARCH_PASSWORD", account.password).strip()
-    if ask or not account.username:
-        account.username = input("请输入 chaoslib 账号: ").strip()
-    if ask or not account.password:
-        account.password = getpass.getpass("请输入 chaoslib 密码: ").strip()
+    if prompt:
+        if not account.username:
+            account.username = input("请输入 chaoslib 账号: ").strip()
+        if not account.password:
+            account.password = getpass.getpass("请输入 chaoslib 密码: ").strip()
+    elif not account.username or not account.password:
+        raise ConfigError("账号或密码为空，请填写")
 
     br_raw = _expect_mapping(raw.get("browser") or {}, "browser")
     browser = BrowserConfig(
@@ -242,17 +244,45 @@ def load_config(path: Path, output_dir: str | None = None,
     env_headless = os.environ.get("AUTOSEARCH_HEADLESS")
     if env_headless is not None:
         browser.headless = env_headless.strip().lower() in ("1", "true", "yes", "on")
-    if force_headed:
-        browser.headless = False
 
-    out = output_dir or os.environ.get("AUTOSEARCH_OUTPUT_DIR") or str(raw.get("output_dir") or "./output")
+    out = os.environ.get("AUTOSEARCH_OUTPUT_DIR") or str(raw.get("output_dir") or "./output")
     out_path = Path(out).expanduser()
     if not out_path.is_absolute():
-        out_path = (path.parent / out_path).resolve()
+        out_path = (base_path / out_path).resolve()
 
     tasks_raw = raw.get("tasks")
     if not isinstance(tasks_raw, list) or not tasks_raw:
         raise ConfigError("tasks 必须是非空列表")
     tasks = [_parse_task(t, i) for i, t in enumerate(tasks_raw)]
 
-    return AppConfig(account=account, browser=browser, output_dir=out_path, tasks=tasks)
+    task_retries = max(0, int(raw.get("task_retries", 1)))
+
+    return AppConfig(account=account, browser=browser, output_dir=out_path,
+                     tasks=tasks, task_retries=task_retries)
+
+
+def load_config(path: Path, output_dir: str | None = None,
+                force_headed: bool = False, ask: bool = False) -> AppConfig:
+    """读取 config.yaml，应用环境变量/命令行覆盖，并做合法性校验。
+
+    优先级（高到低）: 命令行参数 > 环境变量 > 配置文件。
+    """
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as e:
+        raise ConfigError(f"YAML 解析失败: {e}") from e
+
+    if not isinstance(raw, dict):
+        raise ConfigError("配置文件根节点必须是键值段(mapping)")
+    if ask:
+        acc = raw.get("account") or {}
+        acc["username"] = ""
+        acc["password"] = ""
+        raw["account"] = acc
+    cfg = parse_raw_config(raw, path.parent, prompt=True)
+    if output_dir:
+        out_path = Path(output_dir).expanduser()
+        cfg.output_dir = out_path if out_path.is_absolute() else (path.parent / out_path).resolve()
+    if force_headed:
+        cfg.browser.headless = False
+    return cfg

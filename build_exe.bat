@@ -23,10 +23,11 @@ if errorlevel 1 goto :err
 echo.
 echo ============================================================
 echo  打包完成: dist\auto_search.exe
-echo  使用: 把 auto_search.exe 放到任意目录, 双击运行一次会生成
-echo        config.yaml 模板, 填写后再次运行即可。
-echo  说明: 默认调用系统自带的 Edge 浏览器 (config.yaml 中
-echo        channel: msedge), 无需额外下载浏览器。
+echo  使用: 把 auto_search.exe 放到任意目录, 双击打开图形界面;
+echo        首次运行会在同目录生成 config.yaml 作为默认配置。
+echo        纯命令行模式(多任务): auto_search.exe --cli
+echo  说明: 默认调用系统自带的 Edge 浏览器 (channel: msedge),
+echo        无需额外下载浏览器。
 echo ============================================================
 pause
 exit /b 0

@@ -26,7 +26,17 @@ def get_logger(name: str, log_file: Path | None = None) -> logging.Logger:
         fh = logging.FileHandler(log_file, encoding="utf-8")
         fh.setFormatter(fmt)
         logger.addHandler(fh)
+    for h in _EXTRA_HANDLERS:  # GUI 等外部注册的输出通道
+        logger.addHandler(h)
     return logger
+
+
+_EXTRA_HANDLERS: list[logging.Handler] = []
+
+
+def register_log_handler(handler: logging.Handler) -> None:
+    """注册额外的日志输出通道（在任务运行前调用，对所有 logger 生效）。"""
+    _EXTRA_HANDLERS.append(handler)
 
 
 async def wait_ready(page: Page, networkidle_ms: int = 5000) -> None:
@@ -127,17 +137,24 @@ async def ensure_checkbox_by_text(page: Page, text_pattern, want: bool, logger: 
         await label.click()
 
 
-# 列出某个容器内所有 checkbox 及其文字标签（用于导出对话框的字段勾选）
-CHECKBOX_MAP_JS = """(root) => Array.from(root.querySelectorAll('input[type="checkbox"]')).map((cb, i) => {
+# 列出某个容器内所有 checkbox(原生 input 和 role=checkbox 自定义控件)及其文字标签
+CHECKBOX_MAP_JS = """(root) => Array.from(root.querySelectorAll('input[type="checkbox"], [role="checkbox"]')).map((el, i) => {
     let text = '';
-    if (cb.labels && cb.labels.length) text = cb.labels[0].innerText;
-    else if (cb.closest('label')) text = cb.closest('label').innerText;
-    else if (cb.parentElement) text = cb.parentElement.innerText;
-    return {index: i, text: text.trim(), checked: cb.checked, disabled: cb.disabled};
+    if (el.labels && el.labels.length) text = el.labels[0].innerText;
+    else if (el.closest('label')) text = el.closest('label').innerText;
+    else if (el.parentElement) text = el.parentElement.innerText;
+    const isNative = el.tagName === 'INPUT';
+    return {
+        index: i,
+        text: text.trim(),
+        checked: isNative ? el.checked : el.getAttribute('aria-checked') === 'true',
+        disabled: isNative ? el.disabled : el.getAttribute('aria-disabled') === 'true',
+    };
 })"""
 
 
 async def toggle_checkbox(scope, index: int) -> None:
     """通过 JS 点击容器内第 index 个 checkbox（触发现有框架的事件处理）。"""
-    await scope.locator('input[type="checkbox"]').nth(index).evaluate("(el) => el.click()")
+    await scope.locator('input[type="checkbox"], [role="checkbox"]').nth(index).evaluate(
+        "(el) => el.click()")
     await asyncio.sleep(0.1)

@@ -28,9 +28,20 @@ def main() -> int:
     parser.add_argument("--headed", action="store_true",
                         help="显示浏览器窗口运行（默认无头；注意: 导出PDF需要无头模式）")
     parser.add_argument("--ask", action="store_true", help="忽略配置中的账号密码，运行时手动输入")
+    parser.add_argument("--cli", action="store_true",
+                        help="纯命令行模式：完全按 config.yaml 运行，不打开图形界面")
     args = parser.parse_args()
 
     cfg_path = Path(args.config) if args.config else default_config_path()
+
+    # 默认打开图形界面；--cli 或无显示环境(如服务器)时走纯命令行
+    if not args.cli:
+        try:
+            from auto_search.gui import run_gui
+            return run_gui(cfg_path)
+        except Exception as e:  # noqa: BLE001 - 无显示环境等
+            print(f"图形界面不可用({e})，改用命令行模式。")
+
     if not cfg_path.exists():
         cfg_path.write_text(CONFIG_TEMPLATE, encoding="utf-8")
         print(f"未找到配置文件，已生成模板: {cfg_path}")

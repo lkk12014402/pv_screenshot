@@ -9,6 +9,7 @@ import asyncio
 import csv
 import logging
 import re
+import time
 from pathlib import Path
 
 from playwright.async_api import Page
@@ -103,10 +104,12 @@ class S:  # noqa: D101 - 选择器集中处
         'button:has-text("Export")',
     ]
     EXPORT_DIALOG = [
+        'form[data-testid="preferences-form"]',
         '[role="dialog"]:has-text("Export to")',
-        '[aria-modal="true"]:has-text("Export to")',
-        'div[role="dialog"]',
     ]
+    # 导出对话框内: 格式下拉 / 提交按钮 / 关闭按钮
+    EXPORT_FORMAT_BTN = '#export-format-selected-value'
+    EXPORT_SUBMIT = 'button[data-testid="export-submit"]'
 
 
 class EmbaseFlow(Flow):
@@ -221,7 +224,23 @@ class EmbaseFlow(Flow):
 
     async def _search(self, page: Page, query: str, logger: logging.Logger) -> None:
         await wait_ready(page, 8000)
-        box = await first_visible(page, S.SEARCH_INPUT, timeout=30000)
+        box = None
+        for attempt in range(2):
+            try:
+                box = await first_visible(page, S.SEARCH_INPUT, timeout=45000)
+                break
+            except LookupError:
+                if attempt == 1:
+                    raise
+                # SPA 的 JS 资源偶尔加载失败("You need to enable JavaScript")，刷新重试
+                logger.warning("检索页未渲染(SPA 资源加载失败?)，刷新重试一次")
+                try:
+                    await page.reload(wait_until="domcontentloaded")
+                except Exception:  # noqa: BLE001
+                    pass
+                await wait_ready(page, 10000)
+                await self._accept_cookies(page, logger)
+                await self._dismiss_overlays(page, logger)
         await fill_input_smart(box, query)
         btn = await first_visible(page, S.SHOW_RESULTS)
         await btn.click()
@@ -251,23 +270,50 @@ class EmbaseFlow(Flow):
                 page, re.compile(r"Records added to Embase"), True, logger, "Records added to Embase")
             await self._fill_labeled_input(page, "Start date", df.start)
             await self._fill_labeled_input(page, "End date", df.end)
+            query_marker = "/sd"   # 生效后检索式会被改写为 ... AND [dd-mm-yyyy]/sd ...
         else:
             # 勾选 “Publication years”，在 From/To 下拉中选择年份
             await ensure_checkbox_by_text(
                 page, re.compile(r"Publication years"), True, logger, "Publication years")
             await self._pick_year(page, "From", df.start, logger)
             await self._pick_year(page, "To", df.end, logger)
+            query_marker = "/py"
 
-        # 点击查询框右侧的搜索按钮（放大镜）
-        btn = await first_visible(page, S.SEARCH_BUTTON, timeout=10000)
-        await btn.click()
-        await wait_ready(page, 8000)
-        try:
-            await page.locator(S.PAGINATION).first.wait_for(state="visible", timeout=30000)
-        except PWTimeout:
-            pass
-        await asyncio.sleep(1.5)
+        # 点击查询框右侧的搜索按钮（放大镜），并验证检索式被改写(否则说明没生效)
+        for attempt in range(2):
+            btn = await first_visible(page, S.SEARCH_BUTTON, timeout=10000)
+            await btn.click()
+            try:
+                await page.wait_for_function(
+                    """(marker) => {
+                        const el = document.querySelector(
+                            'form[data-testid="results-search-form"] textarea');
+                        return el && el.value.includes(marker);
+                    }""",
+                    arg=query_marker, timeout=90000)
+                break
+            except PWTimeout:
+                if attempt == 0:
+                    logger.warning("日期过滤未生效(检索式未被改写)，重试一次")
+                    continue
+                raise RuntimeError("日期过滤多次尝试后仍未生效，请检查 _debug 快照")
+        await self._wait_results_settled(page)
         logger.info("已应用日期过滤: %s ~ %s (%s)", df.start, df.end, df.type)
+
+    async def _wait_results_settled(self, page: Page, timeout: float = 60.0) -> None:
+        """等结果区稳定: 分页文本连续两次读取一致(慢代理下刷新可能要十几秒)。"""
+        last = None
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                cur = " ".join(
+                    (await page.locator(S.PAGINATION).first.inner_text(timeout=3000)).split())
+            except Exception:  # noqa: BLE001
+                cur = "<loading>"
+            if cur and cur == last and cur != "<loading>":
+                return
+            last = cur
+            await asyncio.sleep(1.0)
 
     async def _fill_labeled_input(self, page: Page, label_text: str, value: str) -> None:
         candidates = [
@@ -281,6 +327,10 @@ class EmbaseFlow(Flow):
                 target = loc.first
                 await target.wait_for(state="visible", timeout=2500)
                 await fill_input_smart(target, value)
+                try:
+                    await target.press("Tab", timeout=1000)  # 移开焦点让日期控件的值生效
+                except Exception:  # noqa: BLE001
+                    pass
                 return
             except Exception:  # noqa: BLE001
                 continue
@@ -312,24 +362,37 @@ class EmbaseFlow(Flow):
         if not per_page:
             return
         # 结果页底部 “Display: N results per page” 自定义下拉([data-testid="page-size"])
-        try:
-            wrap = page.locator(S.PAGE_SIZE_WRAP)
-            wrap_text = (await wrap.inner_text(timeout=8000)).strip()
-            if re.search(rf"Display:\s*{per_page}\b", wrap_text):
-                logger.info("每页条数已是 %d", per_page)
-                return
-            dd = wrap.locator('button[role="combobox"]').first
-            await dd.scroll_into_view_if_needed()
-            await dd.click()
-            opt = page.locator('[role="listbox"] [role="option"]').get_by_text(
-                re.compile(rf"^{per_page}$")).first
-            await opt.wait_for(state="visible", timeout=5000)
-            await opt.click()
-            await wait_ready(page, 8000)
-            await asyncio.sleep(2)  # 等结果列表刷新
-            logger.info("已设置每页显示 %d 条", per_page)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("设置每页 %d 条失败(%s)，将按当前默认条数继续", per_page, e)
+        # 注意: 慢代理下设置可能十几秒后才生效，必须轮询确认，失败重试
+        wrap = page.locator(S.PAGE_SIZE_WRAP)
+        target_re = re.compile(rf"Display:\s*{per_page}\b")
+        for attempt in range(3):
+            try:
+                wrap_text = " ".join((await wrap.inner_text(timeout=8000)).split())
+                if target_re.search(wrap_text):
+                    logger.info("每页条数已是 %d", per_page)
+                    return
+                dd = wrap.locator('button[role="combobox"]').first
+                await dd.scroll_into_view_if_needed()
+                await dd.click()
+                opt = page.locator('[role="option"]').get_by_text(
+                    re.compile(rf"^{per_page}$")).first
+                await opt.wait_for(state="visible", timeout=5000)
+                await opt.click()
+                deadline = time.monotonic() + 60
+                while time.monotonic() < deadline:
+                    try:
+                        wrap_text = " ".join((await wrap.inner_text(timeout=3000)).split())
+                    except Exception:  # noqa: BLE001
+                        wrap_text = ""
+                    if target_re.search(wrap_text):
+                        await self._wait_results_settled(page)
+                        logger.info("已设置每页显示 %d 条", per_page)
+                        return
+                    await asyncio.sleep(1.0)
+                logger.warning("每页条数未生效(当前: %s)，重试(%d/3)", wrap_text, attempt + 1)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("设置每页 %d 条出错(%s)，重试(%d/3)", per_page, e, attempt + 1)
+        logger.warning("每页条数设置多次未生效，将按当前默认条数继续")
 
     async def _pagination_info(self, page: Page) -> tuple[int, int]:
         """读取分页栏 "Page X of Y"，找不到时视为只有 1 页。"""
@@ -417,29 +480,61 @@ class EmbaseFlow(Flow):
         csv_dir.mkdir(parents=True, exist_ok=True)
         await self._select_current_page(page, logger)
 
-        exp = await first_visible(page, S.EXPORT_BUTTON, timeout=10000)
+        # 等 Export 按钮可用(有勾选才可用)再点击
+        exp = page.locator('button[data-testid="export"]').first
+        try:
+            await page.wait_for_function(
+                """() => {
+                    const b = document.querySelector('button[data-testid="export"]');
+                    return b && !b.disabled && !b.className.includes('disabled');
+                }""",
+                timeout=15000)
+        except PWTimeout:
+            logger.warning("Export 按钮一直不可用(勾选可能未生效)，仍尝试点击")
         await exp.scroll_into_view_if_needed()
         await exp.click()
 
         dlg = await first_visible(page, S.EXPORT_DIALOG, timeout=15000)
-        await self._ensure_export_format_csv(dlg, logger)
+        await self._ensure_export_format_csv(page, dlg, logger)
         await self._set_fields_by(dlg, task.export_csv.fields_by, logger)
         await self._set_export_fields(page, dlg, task.export_csv.fields, logger)
 
-        btn = await first_visible(dlg, [
-            'button:has-text("Export")',
-            'button[type="submit"]',
-        ], timeout=10000)
-        async with page.expect_download(timeout=180000) as dl_info:
-            await btn.click()
+        # 提交按钮在 ModalButtons 区域，不在 preferences-form 内，须在页面级查找
+        btn = page.locator(S.EXPORT_SUBMIT).first
+        await btn.wait_for(state="visible", timeout=10000)
+        await btn.click()
+
+        # 提交后 Embase 会新开 /search/download 标签页，等导出文件生成后上面有 Download 链接
+        dl_page = await self._wait_download_page(page, timeout_ms=60000)
+        link = dl_page.locator('a[href*="/rest/download/"]').first
+        try:
+            await link.wait_for(state="visible", timeout=300000)  # 大导出需先生成，最多等 5 分钟
+        except PWTimeout as e:
+            raise RuntimeError("导出文件 5 分钟内未生成(Download 链接未出现)") from e
+        async with dl_page.expect_download(timeout=180000) as dl_info:
+            await link.click()
         download = await dl_info.value
         path = csv_dir / f"page_{idx:03d}.csv"
         await download.save_as(str(path))
         logger.info("已保存 %s", path)
-        try:
-            await page.keyboard.press("Escape")  # 若对话框未自动关闭
-        except Exception:  # noqa: BLE001
-            pass
+        # 关掉下载标签页，回到结果页继续
+        if dl_page is not page:
+            try:
+                await dl_page.close()
+            except Exception:  # noqa: BLE001
+                pass
+            await page.bring_to_front()
+
+    @staticmethod
+    async def _wait_download_page(page: Page, timeout_ms: int) -> Page:
+        """导出提交后，等待任一标签页跳到 /search/download（可能是新标签页）。"""
+        deadline = time.monotonic() + timeout_ms / 1000
+        while time.monotonic() < deadline:
+            for p in page.context.pages:
+                if not p.is_closed() and "/search/download" in p.url:
+                    return p
+            await asyncio.sleep(0.5)
+        raise RuntimeError("导出提交后未出现下载页(/search/download)")
 
     async def _select_current_page(self, page: Page, logger: logging.Logger) -> None:
         """勾选结果列表的“Select page results”复选框（选中当前页全部结果）。
@@ -447,6 +542,16 @@ class EmbaseFlow(Flow):
         该 checkbox 是自定义样式(input 视觉隐藏)，用 JS click 触发框架事件最可靠。
         """
         try:
+            # 先清空跨页累计的勾选(Embase 翻页后勾选会保留，不清空会重复导出)
+            clear_btn = page.locator('button[aria-label*="clear selection" i]').first
+            if await clear_btn.count():
+                try:
+                    await clear_btn.click(timeout=3000)
+                    await page.get_by_text(re.compile(r"[\d,]+\s+selected")).first.wait_for(
+                        state="hidden", timeout=5000)
+                except Exception:  # noqa: BLE001
+                    pass
+            # 勾选本页 “Select page results”(自定义样式 checkbox，用 JS click 触发框架事件)
             cb = page.locator(S.SELECT_PAGE_CB).first
             await cb.wait_for(state="attached", timeout=8000)
             if not await cb.is_checked():
@@ -460,47 +565,52 @@ class EmbaseFlow(Flow):
             logger.warning("未找到 Select page results 复选框，尝试勾选 Select all")
             await ensure_checkbox_by_text(
                 page, re.compile(r"^Select all$"), True, logger, "Select all")
-        # 确认出现了 “N selected” 或 Export 按钮变为可用
+        # 确认出现了 “N selected”（没勾选上时导出无意义，直接报错）
         try:
-            txt = await page.get_by_text(re.compile(r"[\d,]+\s+selected")).first.inner_text(timeout=5000)
+            txt = await page.get_by_text(re.compile(r"[\d,]+\s+selected")).first.inner_text(timeout=10000)
             logger.info("已勾选: %s", txt.strip())
-        except Exception:  # noqa: BLE001
-            try:
-                checked = await page.locator(S.SELECT_PAGE_CB).first.is_checked()
-                if not checked:
-                    logger.warning("本页结果勾选状态未确认，仍继续导出，请人工核对")
-            except Exception:  # noqa: BLE001
-                logger.warning("本页结果勾选状态未确认，仍继续导出，请人工核对")
-
-    async def _ensure_export_format_csv(self, dlg, logger: logging.Logger) -> None:
-        """导出对话框 “Export to” 选择 CSV（默认通常已是 CSV）。"""
-        try:
-            cur = dlg.locator(
-                '[role="combobox"], button[aria-haspopup], select').first
-            text = (await cur.inner_text(timeout=3000)).strip()
-            if "csv" in text.lower():
-                return
-            await cur.click()
-            opt = await first_visible(dlg, [
-                '[role="option"]:text-matches("^CSV$", "i")',
-                'text=/^CSV$/',
-            ], timeout=3000)
-            await opt.click()
-            logger.info("导出格式已选择 CSV")
         except Exception as e:  # noqa: BLE001
-            logger.warning("未能确认导出格式为 CSV(%s)，按当前默认继续", e)
+            raise RuntimeError("勾选本页结果后未出现 “N selected” 提示，勾选未生效") from e
+
+    async def _ensure_export_format_csv(self, page: Page, dlg, logger: logging.Logger) -> None:
+        """导出对话框 “Export to” 下拉切换为 CSV（默认可能是 RIS）。
+
+        注意: RIS 格式下字段是静态列表，切成 CSV 后才会出现可勾选的字段和
+        Fields by(Row/Column)选项；切换后对话框内容会重渲染。
+        """
+        btn = dlg.locator(S.EXPORT_FORMAT_BTN).first
+        await btn.wait_for(state="visible", timeout=8000)
+        cur = (await btn.inner_text()).strip()
+        if re.search(r"\bCSV\b", cur, re.I):
+            return
+        await btn.click()
+        opt = page.locator('[role="option"]').get_by_text(re.compile(r"\bCSV\b", re.I)).first
+        await opt.wait_for(state="visible", timeout=5000)
+        await opt.click()
+        logger.info("导出格式已切换为 CSV (原格式: %s)", cur)
+        # 等字段勾选区渲染出来
+        try:
+            await dlg.locator('input[type="checkbox"], [role="checkbox"]').first.wait_for(
+                state="visible", timeout=10000)
+        except PWTimeout:
+            pass
+        await asyncio.sleep(1)
 
     async def _set_fields_by(self, dlg, fields_by: str, logger: logging.Logger) -> None:
-        """Fields by: Row / Column 单选。"""
+        """Fields by: Row / Column 单选（原生 radio, value=ROW/COLUMN, 视觉隐藏用 JS 点）。"""
         name = "Column" if fields_by == "column" else "Row"
         try:
-            radio = dlg.get_by_label(re.compile(f"^{name}$", re.I)).first
-            await radio.check(timeout=3000)
+            inp = dlg.locator(f'input[type="radio"][value="{name.upper()}"]').first
+            await inp.wait_for(state="attached", timeout=4000)
+            if not await inp.is_checked():
+                await inp.evaluate("(el) => el.click()")
+            return
         except Exception:  # noqa: BLE001
-            try:
-                await dlg.get_by_text(re.compile(f"^{name}$")).first.click(timeout=3000)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("设置 Fields by=%s 失败(%s)，按当前默认继续", name, e)
+            pass
+        try:
+            await dlg.get_by_text(re.compile(f"^{name}$")).first.click(timeout=3000)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("设置 Fields by=%s 失败(%s)，按当前默认继续", name, e)
 
     async def _set_export_fields(self, page: Page, dlg, wanted_fields: list[str],
                                  logger: logging.Logger) -> None:
