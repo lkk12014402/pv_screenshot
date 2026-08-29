@@ -2,8 +2,8 @@
 # 也可以不写在这里，改用环境变量 AUTOSEARCH_USERNAME / AUTOSEARCH_PASSWORD，
 # 或运行时加 --ask 参数手动输入
 account:
-  username: "3121988559459"      # chaoslib 账号
-  password: "489027"      # chaoslib 密码
+  username: ""      # chaoslib 账号
+  password: ""      # chaoslib 密码
 
 # ================= 浏览器 =================
 browser:
