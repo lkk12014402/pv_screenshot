@@ -1,0 +1,4 @@
+14:36:14 [INFO] 任务输出目录: /home/lvkaokao/yingyue/auto_search/output/embase_demo_20260829_143614
+14:36:14 [INFO] 打开 https://www.chaoslib.com/
+14:36:55 [INFO] 已保存调试快照到 /home/lvkaokao/yingyue/auto_search/output/embase_demo_20260829_143614/_debug
+14:36:55 [ERROR] 任务失败: 登录可能失败，页面仍停留在登录页。页面提示: 账号已在其他设备登录，IP: 134.134.137.76

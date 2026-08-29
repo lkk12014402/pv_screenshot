@@ -1,0 +1,6 @@
+14:41:51 [INFO] 任务输出目录: /home/lvkaokao/yingyue/auto_search/output/embase_demo_20260829_144151
+14:41:51 [INFO] 打开 https://www.chaoslib.com/
+14:42:15 [INFO] 登录成功: https://www.chaoslib.com/
+14:42:31 [INFO] 已进入 embase: https://www-embase-com.webvpn.sjlib.cn/id-plus-login
+14:43:02 [INFO] 已保存调试快照到 /home/lvkaokao/yingyue/auto_search/output/embase_demo_20260829_144151/_debug
+14:43:02 [ERROR] 任务失败: 找不到可见元素，已依次尝试: input[placeholder*="heart attack"] | textarea[placeholder*="heart attack"] | #searchForm input[type="text"] | main input[type="text"]

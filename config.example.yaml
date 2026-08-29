@@ -1,0 +1,52 @@
+# ================= 账号 =================
+# 也可以不写在这里，改用环境变量 AUTOSEARCH_USERNAME / AUTOSEARCH_PASSWORD，
+# 或运行时加 --ask 参数手动输入
+account:
+  username: ""      # chaoslib 账号
+  password: ""      # chaoslib 密码
+
+# ================= 浏览器 =================
+browser:
+  headless: true        # true=无头后台运行(可导出PDF); false=显示浏览器窗口
+  channel: msedge       # 使用系统浏览器: msedge / chrome; 填 chromium 则用内置浏览器
+  # user_agent: ""      # 高级选项: 自定义 UA，一般留空即可
+  # locale: zh-CN
+  # timezone: Asia/Shanghai
+
+# 输出根目录（每个任务会在下面创建一个带时间戳的子目录）
+output_dir: "./output"
+
+# ================= 任务列表（可配置多个，按顺序执行） =================
+tasks:
+  - name: embase_demo             # 任务名，用于输出子目录命名
+    site: chaoslib                # 站点: 目前支持 chaoslib
+    database: embase              # 数据库: embase (pubmed 后续支持)
+    query: "'adverse event'/exp OR 'adverse event'"   # Embase 检索式
+
+    # 检索日期范围（对应结果页 Date 面板，设置后再点搜索按钮）
+    date_filter:
+      enabled: true
+      type: records_added         # records_added=入库日期(Start/End date); publication_years=发表年份
+      start: "2026-08-23"         # records_added 填 yyyy-mm-dd
+      end: "2026-08-28"           # publication_years 时填年份如 "2020"
+
+    per_page: 200                 # 每页显示条数 (Display: N results per page)
+    max_pages: 0                  # 最多处理多少页, 0=全部
+
+    # 逐页打印 PDF（等价于浏览器“打印-另存为PDF”，含页眉页脚设置）
+    print_pdf:
+      enabled: true
+      header_footer: true         # 页眉(日期+标题) / 页脚(网址+页码)
+      paper_format: Letter        # Letter / A4
+      scale: 1.0                  # 缩放, 0.1 ~ 2.0
+
+    # 逐页导出 CSV（对应 Select -> Export）
+    export_csv:
+      enabled: true
+      fields_by: column           # column / row
+      fields:                     # 需要勾选的字段，名字必须与网页上的文字完全一致
+        - "Title"
+        - "Source"
+        - "Author names"
+        - "Digital Object Identifier (DOI)"
+        - "Medline PMID"

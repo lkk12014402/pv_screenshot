@@ -1,0 +1,76 @@
+<html><head>
+    <title>混沌书苑-用户登录</title>
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Cache-Control" content="no-cache">
+    <meta http-equiv="Cache-Control" content="must-revalidate">
+    <meta http-equiv="Expires" content="-1">
+    <meta name="viewport" content="width=device-width,initial-scale=1,minimum-scale=1,maximum-scale=1,user-scalable=0,minimal-ui">
+    <meta name="csrf-token" content="ImQxMTU3NDk3MmY1YTRlZjY1YmE0NWEzYjM2MTFmNzJkYzA4ZDE2YWUi.apJ94g.zgzi8-KiR_DsDjO4poqcn3v-gwE">
+    <meta name="username" content="">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <link rel="icon" type="image/x-icon" href="/images/favicon.ico">
+    <link rel="preload" href="/images/login_bg.png" as="image">
+    <link href="/css/style.css" type="text/css" rel="stylesheet">
+    <link href="/css/theme_skin.css" type="text/css" rel="stylesheet">
+    <script src="/js/rsa.min.js"></script>
+<link id="layuicss-laydate" rel="stylesheet" href="https://www.chaoslib.com/index/layui/css/modules/laydate/default/laydate.css?v=5.3.1" media="all"><link id="layuicss-layer" rel="stylesheet" href="https://www.chaoslib.com/index/layui/css/modules/layer/default/layer.css?v=3.5.1" media="all"><link id="layuicss-skincodecss" rel="stylesheet" href="https://www.chaoslib.com/index/layui/css/modules/code.css?v=2" media="all"></head>
+<body class="sangfor-body">
+<div id="app" avalonctrl="app">
+    <div class="sangfor-main" ui-view="main" data-current-cache="false">
+        <div class="login" avalonctrl="login">
+            <div class="login-head">
+                <div class="login-head__content clearfix rel">
+                    <div class="login-head__logo clearfix overflow">
+                        <img class="login-head__img" draggable="false" src="/images/logo-3.png?r=00000000">
+                        <span class="login-head__title ie-inline-block"></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="login-body">
+                <div class="login-content clearfix">
+                    <div class="login-notice rel">
+                        <div class="login-notice__title">
+                            <i class="iconfont-broadcast login-notice__icon"></i>
+                            <span data-i18n-key="温馨提示" avalonctrl="i18n453683040985" style="">温馨提示</span>
+                        </div>
+                        <div class="login-notice__content enable-choose">欢迎使用混沌书苑WebVPN管理系统访问学院内网资源，
+                            请使用内网资源账号登录， WebVPN系统浏览网页资源免插件，支持终端更全面，让您的接入更便捷，体验更好！
+                        </div>
+                        <div class="login-notice-bg"></div>
+                    </div>
+                    <div class="login-panel">
+                        <div class="login-panel__body">
+                            <div id="login-box"><div class="include-box__title box-title"><span data-i18n-key="账号登录" style="">账号登录</span></div><form id="loginForm" method="post" onsubmit="return false"><div class="pt20"><div data-input-ctr="username"><div class="form-line rel input-login-style"><div class="input-box rel"><span id="i18n474015837940" class="input-column-name input-focus-column">账 号</span><input class="input-txt" data-field="i18n474015837940" oninvalid="setCustomValidity()" oninput="setCustomValidity()" type="text" id="username" value="" style=""><span class="input-linellae" id="i18n474015837940-line"></span></div></div></div></div><div class="rel"><div data-input-ctr="password"><div class="form-line rel input-login-style"><div class="input-box rel"><span id="i18n474015837941" class="input-column-name input-focus-column">密 码</span><input class="input-txt" data-field="i18n474015837941" oninvalid="setCustomValidity()" oninput="setCustomValidity()" type="password" id="password" style=""><span class="input-linellae" id="i18n474015837941-line"></span></div></div></div></div><div class="include-box__tip auto-label-pwdtip"><div id="login-enable-choose" class="enable-choose"></div></div><div class="include-box__privacy"><input class="checkbox__input" id="login-checkbox" checked="" type="checkbox" value="y" style=""><div id="login-agree" class="checkbox__mark checkbox--small checkbox--active"><i class="iconfont"></i></div><div class="checkbox__label checkbox--small">我已阅读并同意</div><a href="#" id="disclaimer" class="theme-link-color" draggable="false">《免责声明》</a></div><input class="button button--normal" id="login-button" value="登 录" type="submit" style=""></form><div class="login-panel__other clearfix login-panel__aligning"><a href="javascript:void(0);" id="switch-login-reg" class="login-panel__other__item theme-link-color uk">免费注册</a><a href="javascript:void(0);" id="switch-login-forget" class="login-panel__other__item theme-link-color uk">忘记密码</a></div></div>
+                        </div>
+
+                        <div class="login-panel__footer">
+                            <div class="login-panel__dowload">
+                                <a href="javascript:void(0);" class="login-panel__link ie-inline-block theme-hover-color" draggable="false">下载客户端</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="/index/layui/layui.js"></script>
+<script src="/js/login.min.v2.4.1.js"></script>
+
+<script>
+    //检测是否是微信浏览器打开
+    var ua = navigator.userAgent.toLowerCase();
+    if (ua.match(/MicroMessenger/i) == "micromessenger") {
+        //微信浏览器
+        var url = window.location.href;
+        var index = url.indexOf("?");
+        if (index > 0) {
+            url = url.substring(0, index);
+        }
+        window.location.href = "https://open.weixin.qq.com/connect/oauth2/authorize?appid=wx8c8b1b1f1f1f1f1f&redirect_uri=" + url + "&response_type=code&scope=snsapi_userinfo&state=STATE#wechat_redirect";
+    }
+</script>
+
+<div class="layui-layer-move" id="layui-layer-move"></div><div class="layui-layer-shade" id="layui-layer-shade2" times="2" style="z-index: 19891015; background-color: rgb(0, 0, 0); opacity: 0.3;"></div><div class="layui-layer layui-layer-dialog" id="layui-layer2" type="dialog" times="2" showtime="0" contype="string" style="z-index: 19891016; position: fixed; top: 358.5px; left: 637.5px;"><div class="layui-layer-title" style="cursor: move;">提示</div><div id="" class="layui-layer-content">账号已在其他设备登录，IP: 134.134.137.76</div><span class="layui-layer-setwin"><a class="layui-layer-ico layui-layer-close layui-layer-close1" href="javascript:;"></a></span><div class="layui-layer-btn layui-layer-btn-"><a class="layui-layer-btn0">强制剔除</a><a class="layui-layer-btn1">取消登录</a></div><span class="layui-layer-resize"></span></div></body></html>
