@@ -79,6 +79,7 @@ class ChaoslibSite(SitePlugin):
                 if await self._wait_login_ok(page, timeout=20000):
                     await wait_ready(page)
                     logger.info("登录成功(已强制下线其他设备): %s", page.url)
+                    await self._wait_home_ready(page, logger)
                     return page
             tip = ""
             for tip_sel in ("#login-enable-choose", ".include-box__tip", ".layui-layer-content"):
@@ -94,7 +95,27 @@ class ChaoslibSite(SitePlugin):
             )
         await wait_ready(page)
         logger.info("登录成功: %s", page.url)
+        await self._wait_home_ready(page, logger)
         return page
+
+    @staticmethod
+    async def _wait_home_ready(page: Page, logger: logging.Logger) -> None:
+        """确认首页前端真正渲染出来；白页(资源加载失败)时刷新重试一次。"""
+        markers = ['input[placeholder*="DOI"]', 'text="数字资源管理系统"', 'text="中文数据库"']
+        for attempt in range(2):
+            try:
+                await first_visible(page, markers, timeout=30000)
+                return
+            except LookupError:
+                if attempt == 0:
+                    logger.warning("首页内容未渲染(白页?)，刷新重试一次")
+                    try:
+                        await page.reload(wait_until="domcontentloaded")
+                    except Exception:  # noqa: BLE001
+                        pass
+                    await wait_ready(page)
+                else:
+                    raise RuntimeError("登录后首页一直未渲染出来，请检查网络后重试")
 
     @staticmethod
     async def _wait_login_ok(page: Page, timeout: int) -> bool:
@@ -137,10 +158,10 @@ class ChaoslibSite(SitePlugin):
 
     async def open_database(self, page: Page, db_name: str, logger: logging.Logger,
                             category: str = "医学数据库") -> Page:
-        # 1. 点击左侧分类（如“医学数据库”）
+        # 1. 点击左侧分类（如“医学数据库”）；首页可能加载较慢，多等一会
         cat = await first_visible(page, [
             f'text="{category}"',
-        ], timeout=15000)
+        ], timeout=40000)
         await cat.click()
         await wait_ready(page, 3000)
 
@@ -149,14 +170,14 @@ class ChaoslibSite(SitePlugin):
         title = self.CARD_TITLES.get(db_name, db_name)
         host_key = self.HOST_KEYS.get(db_name, db_name)
         last_err = ""
-        for attempt in range(3):
+        for attempt in range(5):
             card = page.get_by_text(title, exact=True).first
             await card.wait_for(state="visible", timeout=15000)
             before = list(page.context.pages)
             await card.click(no_wait_after=True)
             db_page = await self._poll_db_page(page, before, host_key, timeout_ms=30000)
             if db_page is None:
-                logger.warning("点击 %s 卡片后未检测到数据库页面，重试(%d/3)", title, attempt + 1)
+                logger.warning("点击 %s 卡片后未检测到数据库页面，重试(%d/5)", title, attempt + 1)
                 continue
             await db_page.bring_to_front()
             try:
@@ -169,8 +190,9 @@ class ChaoslibSite(SitePlugin):
                 logger.info("已进入 %s: %s", db_name, db_page.url)
                 return db_page
             last_err = gw_err or f"未跳转到 {host_key} (当前 {db_page.url})"
-            logger.warning("进入 %s 失败: %s，5 秒后重试(%d/3)", db_name, last_err, attempt + 1)
-            await asyncio.sleep(5)
+            wait_s = min(10 * (attempt + 1), 40)
+            logger.warning("进入 %s 失败: %s，%d 秒后重试(%d/5)", db_name, last_err, wait_s, attempt + 1)
+            await asyncio.sleep(wait_s)
             # 清理失败页面，回到首页状态再重新点击
             if db_page is not page:
                 try:
