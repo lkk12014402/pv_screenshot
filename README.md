@@ -82,11 +82,15 @@ tasks:                     # 可配多个任务，按顺序执行
     screenshot:            # 检索结果页整页截图(应用日期过滤后)，保存为 screenshot_results.png
       enabled: true        # 条目多时图片会很长很大，属正常；不需要可设 false
 
-    print_pdf:             # 逐页打印为 PDF（含页眉页脚）
+    print_pdf:             # 逐页打印为 PDF（与浏览器"打印-另存为PDF"同一引擎）
       enabled: true
-      header_footer: true
-      paper_format: Letter # 或 A4
+      header_footer: true  # 页眉(左日期/右标题) 页脚(左网址/右页码)，样式与浏览器默认一致
+      paper_format: A4    # 与手动打印默认纸张一致; 可选 Letter
       scale: 1.0
+      # 高级：自定义页眉/页脚 HTML 模板(留空=默认)。
+      # 占位符 class: date / title / url / pageNumber / totalPages
+      # header_template: ""
+      # footer_template: ""
 
     export_csv:            # 逐页导出 CSV
       enabled: true

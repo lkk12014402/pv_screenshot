@@ -37,31 +37,28 @@ def build_raw_config(base_raw: dict, v: dict) -> dict:
 
     tasks = list(raw.get("tasks") or [{}])
     t = dict(tasks[0] if tasks else {})
+    # 各子段做合并而非替换，保留界面上没有的高级配置项(如 print_pdf.header_template)
+    df = dict(t.get("date_filter") or {})
+    df.update(enabled=v["df_enabled"], type=v["df_type"], start=v["df_start"], end=v["df_end"])
+    pp = dict(t.get("print_pdf") or {})
+    pp.update(enabled=v["pdf_enabled"], header_footer=v["pdf_header_footer"],
+              paper_format=v["pdf_format"], scale=v["pdf_scale"])
+    ss = dict(t.get("screenshot") or {})
+    ss.update(enabled=v["screenshot_enabled"])
+    ex = dict(t.get("export_csv") or {})
+    ex.update(enabled=v["csv_enabled"], fields_by=v["csv_fields_by"],
+              fields=[f for f in v["csv_fields"] if f])
     t.update(
         name=t.get("name") or "embase_task",
         site=t.get("site") or "chaoslib",
         database=t.get("database") or "embase",
         query=v["query"],
-        date_filter={
-            "enabled": v["df_enabled"],
-            "type": v["df_type"],
-            "start": v["df_start"],
-            "end": v["df_end"],
-        },
+        date_filter=df,
         per_page=v["per_page"],
         max_pages=v["max_pages"],
-        screenshot={"enabled": v["screenshot_enabled"]},
-        print_pdf={
-            "enabled": v["pdf_enabled"],
-            "header_footer": v["pdf_header_footer"],
-            "paper_format": v["pdf_format"],
-            "scale": v["pdf_scale"],
-        },
-        export_csv={
-            "enabled": v["csv_enabled"],
-            "fields_by": v["csv_fields_by"],
-            "fields": [f for f in v["csv_fields"] if f],
-        },
+        screenshot=ss,
+        print_pdf=pp,
+        export_csv=ex,
     )
     tasks[0] = t
     raw["tasks"] = tasks[:1]  # GUI 只运行单个任务
@@ -251,7 +248,7 @@ class App:
             "slow_mo": int(self.v_slowmo.get() or 0),
             "pdf_enabled": self.v_pdf.get(),
             "pdf_header_footer": self.v_pdf_hf.get(),
-            "pdf_format": str((self.base_raw.get("tasks") or [{}])[0].get("print_pdf", {}).get("paper_format", "Letter")),
+            "pdf_format": str((self.base_raw.get("tasks") or [{}])[0].get("print_pdf", {}).get("paper_format", "A4")),
             "pdf_scale": float((self.base_raw.get("tasks") or [{}])[0].get("print_pdf", {}).get("scale", 1.0)),
             "screenshot_enabled": self.v_shot.get(),
             "csv_enabled": self.v_csv.get(),

@@ -27,18 +27,24 @@ from ..utils import (
 )
 from .base import Flow
 
-# 页眉页脚模板（等价于浏览器打印对话框“更多设置-页眉和页脚”的默认样式）
+# 页眉页脚默认模板（按 Edge/Chrome 打印预览"页眉和页脚"的实际输出 1:1 调校：
+# 页眉=左日期/标题居中于剩余空间，页脚=左网址/右页码，9px 字体，页边距 1cm）。
+# 可用占位符 class: date / title / url / pageNumber / totalPages
 HEADER_TPL = (
-    '<div style="font-size:9px;width:100%;padding:4px 24px 0;'
-    'display:flex;justify-content:space-between;color:#555;">'
-    '<span class="date"></span><span class="title"></span></div>'
+    '<div style="display:flex;width:100%;font-size:9px;font-family:sans-serif;'
+    'padding-left:32px;box-sizing:border-box;margin-top:1px;">'
+    '<span class="date"></span>'
+    '<span class="title" style="flex:1;text-align:center;"></span></div>'
 )
 FOOTER_TPL = (
-    '<div style="font-size:9px;width:100%;padding:0 24px;'
-    'display:flex;justify-content:space-between;color:#555;">'
+    '<div style="display:flex;width:100%;font-size:9px;font-family:sans-serif;'
+    'justify-content:space-between;padding: 0 32px 2px;box-sizing:border-box;">'
     '<span class="url"></span>'
-    '<span><span class="pageNumber"></span> / <span class="totalPages"></span></span></div>'
+    '<span><span class="pageNumber"></span>/<span class="totalPages"></span></span></div>'
 )
+# 打印页边距默认 1cm（与浏览器打印预览在公制区域的"默认"页边距一致）；CDP 参数用英寸
+PRINT_MARGIN_CM = 1.0
+PRINT_MARGIN_IN = PRINT_MARGIN_CM / 2.54
 
 PAGE_NUM_RE = re.compile(r"Page\s+(\d+)\s+of\s+([\d,]+)")
 
@@ -480,6 +486,13 @@ class EmbaseFlow(Flow):
 
     # ---------------- 打印 PDF ----------------
 
+    @staticmethod
+    def _pdf_templates(task: TaskConfig) -> tuple[str, str]:
+        """页眉页脚模板：优先用配置里的自定义模板，否则用内置默认（贴近浏览器预览样式）。"""
+        header = task.print_pdf.header_template.strip() or HEADER_TPL
+        footer = task.print_pdf.footer_template.strip() or FOOTER_TPL
+        return header, footer
+
     async def _print_page(self, page: Page, task: TaskConfig, pdf_dir: Path,
                           idx: int, logger: logging.Logger, headless: bool = True) -> None:
         pdf_dir.mkdir(parents=True, exist_ok=True)
@@ -492,11 +505,13 @@ class EmbaseFlow(Flow):
             "scale": task.print_pdf.scale,
         }
         if task.print_pdf.header_footer:
+            header, footer = self._pdf_templates(task)
             kwargs.update(
                 display_header_footer=True,
-                header_template=HEADER_TPL,
-                footer_template=FOOTER_TPL,
-                margin={"top": "1.5cm", "bottom": "1.5cm", "left": "1.2cm", "right": "1.2cm"},
+                header_template=header,
+                footer_template=footer,
+                margin={"top": f"{PRINT_MARGIN_IN}in", "bottom": f"{PRINT_MARGIN_IN}in",
+                        "left": f"{PRINT_MARGIN_IN}in", "right": f"{PRINT_MARGIN_IN}in"},
             )
         if headless:
             await page.pdf(**kwargs)
@@ -527,11 +542,13 @@ class EmbaseFlow(Flow):
             else:
                 params.update(paperWidth=8.5, paperHeight=11.0)
             if task.print_pdf.header_footer:
+                header, footer = self._pdf_templates(task)
                 params.update(
                     displayHeaderFooter=True,
-                    headerTemplate=HEADER_TPL,
-                    footerTemplate=FOOTER_TPL,
-                    marginTop=0.59, marginBottom=0.59, marginLeft=0.47, marginRight=0.47,
+                    headerTemplate=header,
+                    footerTemplate=footer,
+                    marginTop=PRINT_MARGIN_IN, marginBottom=PRINT_MARGIN_IN,
+                    marginLeft=PRINT_MARGIN_IN, marginRight=PRINT_MARGIN_IN,
                 )
             resp = await asyncio.wait_for(session.send("Page.printToPDF", params), timeout=60)
             path.write_bytes(base64.b64decode(resp["data"]))
@@ -568,11 +585,13 @@ class EmbaseFlow(Flow):
                 "scale": task.print_pdf.scale,
             }
             if task.print_pdf.header_footer:
+                header, footer = self._pdf_templates(task)
                 kwargs.update(
                     display_header_footer=True,
-                    header_template=HEADER_TPL,
-                    footer_template=FOOTER_TPL,
-                    margin={"top": "1.5cm", "bottom": "1.5cm", "left": "1.2cm", "right": "1.2cm"},
+                    header_template=header,
+                    footer_template=footer,
+                    margin={"top": f"{PRINT_MARGIN_IN}in", "bottom": f"{PRINT_MARGIN_IN}in",
+                            "left": f"{PRINT_MARGIN_IN}in", "right": f"{PRINT_MARGIN_IN}in"},
                 )
             await cp.pdf(**kwargs)
         finally:

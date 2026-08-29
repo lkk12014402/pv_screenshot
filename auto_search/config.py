@@ -62,9 +62,13 @@ tasks:
     # 逐页打印 PDF（等价于浏览器“打印-另存为PDF”，含页眉页脚设置）
     print_pdf:
       enabled: true
-      header_footer: true         # 页眉(日期+标题) / 页脚(网址+页码)
-      paper_format: Letter        # Letter / A4
+      header_footer: true         # 页眉(左日期/右标题) 页脚(左网址/右页码)，与浏览器默认样式一致
+      paper_format: A4            # A4 / Letter
       scale: 1.0                  # 缩放, 0.1 ~ 2.0
+      # 高级: 自定义页眉/页脚 HTML 模板(留空=默认)。可用占位符 class:
+      #   date / title / url / pageNumber / totalPages
+      # header_template: ""
+      # footer_template: ""
 
     # 逐页导出 CSV（对应 Select -> Export）
     export_csv:
@@ -110,8 +114,10 @@ class DateFilterConfig:
 class PrintPdfConfig:
     enabled: bool = True
     header_footer: bool = True
-    paper_format: str = "Letter"
+    paper_format: str = "A4"
     scale: float = 1.0
+    header_template: str = ""  # 留空=内置默认(贴近浏览器打印样式); 占位符 class: date/title/url/pageNumber/totalPages
+    footer_template: str = ""
 
 
 @dataclass
@@ -180,8 +186,10 @@ def _parse_task(raw, idx: int) -> TaskConfig:
     pp = PrintPdfConfig(
         enabled=bool(pp_raw.get("enabled", True)),
         header_footer=bool(pp_raw.get("header_footer", True)),
-        paper_format=str(pp_raw.get("paper_format", "Letter")),
+        paper_format=str(pp_raw.get("paper_format", "A4")),
         scale=float(pp_raw.get("scale", 1.0)),
+        header_template=str(pp_raw.get("header_template", "") or ""),
+        footer_template=str(pp_raw.get("footer_template", "") or ""),
     )
     if not 0.1 <= pp.scale <= 2.0:
         raise ConfigError(f"{where}.print_pdf.scale 必须在 0.1 ~ 2.0 之间")
