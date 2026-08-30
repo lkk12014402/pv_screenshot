@@ -28,17 +28,17 @@ from ..utils import (
 from .base import Flow
 
 # 页眉页脚默认模板（按 Edge/Chrome 打印预览"页眉和页脚"的实际输出 1:1 调校：
-# 页眉=左日期/标题居中于剩余空间，页脚=左网址/右页码，9px 字体，页边距 1cm）。
+# 页眉=左日期/标题居中于剩余空间，页脚=左网址/右页码，10.25px 字体，页边距 1cm）。
 # 可用占位符 class: date / title / url / pageNumber / totalPages
 HEADER_TPL = (
-    '<div style="display:flex;width:100%;font-size:9px;font-family:sans-serif;'
-    'padding-left:32px;box-sizing:border-box;margin-top:1px;">'
+    '<div style="display:flex;width:100%;font-size:10.25px;font-family:sans-serif;'
+    'padding-left:32px;box-sizing:border-box;margin-top:0.3px;">'
     '<span class="date"></span>'
     '<span class="title" style="flex:1;text-align:center;"></span></div>'
 )
 FOOTER_TPL = (
-    '<div style="display:flex;width:100%;font-size:9px;font-family:sans-serif;'
-    'justify-content:space-between;padding: 0 32px 2px;box-sizing:border-box;">'
+    '<div style="display:flex;width:100%;font-size:10.25px;font-family:sans-serif;'
+    'justify-content:space-between;padding:0 32px 1.3px;box-sizing:border-box;">'
     '<span class="url"></span>'
     '<span><span class="pageNumber"></span>/<span class="totalPages"></span></span></div>'
 )
