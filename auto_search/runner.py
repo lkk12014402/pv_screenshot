@@ -19,7 +19,8 @@ def _safe_name(name: str) -> str:
 
 # 任务级重试: 这些错误多为网络/VPN 临时问题，值得整体重跑
 TRANSIENT_RE = re.compile(
-    r"Gateway Timeout|Bad Gateway|网关|多次尝试后仍无法进入|Timeout.*exceeded|白页|未渲染",
+    r"Gateway Timeout|Bad Gateway|网关|多次尝试后仍无法进入|Timeout.*exceeded|白页|未渲染"
+    r"|net::ERR_|ERR_EMPTY_RESPONSE|ERR_CONNECTION",
     re.I)
 
 

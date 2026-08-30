@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sys
 import time
 from pathlib import Path
@@ -135,6 +136,36 @@ async def ensure_checkbox_by_text(page: Page, text_pattern, want: bool, logger: 
         return
     if state != want:
         await label.click()
+
+
+# 中转网关错误页特征(如 "504 Gateway Timeout: remote server did not respond to the proxy")
+GATEWAY_ERR_RE = re.compile(
+    r"50[24]\s*(Gateway|Bad Gateway)|Gateway Timeout|did not respond to the proxy", re.I)
+
+
+async def is_gateway_error_page(page: Page) -> bool:
+    """当前页是否为 WebVPN 中转网关的 50x 错误页。"""
+    try:
+        if GATEWAY_ERR_RE.search(await page.title()):
+            return True
+        text = (await page.inner_text("body"))[:1500]
+        return bool(GATEWAY_ERR_RE.search(text)) and len(text) < 1500
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def goto_gateway_retry(page: Page, url: str, logger: logging.Logger,
+                             attempts: int = 3, **kwargs) -> None:
+    """带网关 50x 重试的页面导航。"""
+    for i in range(attempts):
+        await page.goto(url, **kwargs)
+        await wait_ready(page, 5000)
+        if not await is_gateway_error_page(page):
+            return
+        wait_s = 5 * (i + 1)
+        logger.warning("网关 50x 错误，%d 秒后重试(%d/%d)", wait_s, i + 1, attempts)
+        await asyncio.sleep(wait_s)
+    raise RuntimeError(f"网关 50x 多次重试仍未恢复: {url[:100]}")
 
 
 # 列出某个容器内所有 checkbox(原生 input 和 role=checkbox 自定义控件)及其文字标签

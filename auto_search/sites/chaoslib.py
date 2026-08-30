@@ -14,6 +14,7 @@ from ..config import AccountConfig
 from ..utils import dump_debug, fill_input_smart, first_visible, wait_ready
 from .base import SitePlugin
 from .embase import EmbaseFlow
+from .pubmed import PubmedFlow
 
 
 class ChaoslibSite(SitePlugin):
@@ -22,7 +23,7 @@ class ChaoslibSite(SitePlugin):
 
     flows = {
         "embase": EmbaseFlow,
-        # "pubmed": PubmedFlow,  # 后续在此扩展
+        "pubmed": PubmedFlow,
     }
 
     # 数据库名 -> 首页卡片上的标题文字

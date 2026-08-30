@@ -40,9 +40,10 @@ task_retries: 1
 
 # ================= 任务列表（可配置多个，按顺序执行） =================
 tasks:
+  # ---- Embase 示例 ----
   - name: embase_demo             # 任务名，用于输出子目录命名
     site: chaoslib                # 站点: 目前支持 chaoslib
-    database: embase              # 数据库: embase (pubmed 后续支持)
+    database: embase              # 数据库: embase / pubmed
     query: "'adverse event'/exp OR 'adverse event'"   # Embase 检索式
 
     # 检索日期范围（对应结果页 Date 面板，设置后再点搜索按钮）
@@ -55,7 +56,7 @@ tasks:
     per_page: 200                 # 每页显示条数 (Display: N results per page)
     max_pages: 0                  # 最多处理多少页, 0=全部
 
-    # 检索结果页整页截图（应用日期过滤后截取）
+    # 检索结果页整页截图（应用日期过滤后截取; 仅 Embase）
     screenshot:
       enabled: true
 
@@ -80,6 +81,22 @@ tasks:
         - "Author names"
         - "Digital Object Identifier (DOI)"
         - "Medline PMID"
+
+  # ---- Pubmed 示例（取消注释即可用; 流程: 检索+Custom Range日期筛选+逐页打印+全量CSV） ----
+  # - name: pubmed_demo
+  #   site: chaoslib
+  #   database: pubmed
+  #   query: "adverse events"
+  #   date_filter:               # 对应 PUBLICATION DATE -> Custom Range -> Apply
+  #     enabled: true
+  #     type: records_added      # pubmed 下 type 不区分, 起止都填 yyyy-mm-dd
+  #     start: "2026-08-23"
+  #     end: "2026-08-28"
+  #   per_page: 200              # 对应 URL 参数 size=200
+  #   max_pages: 0
+  #   print_pdf: {enabled: true}
+  #   export_csv: {enabled: true}   # Save -> All results + CSV -> Create file 一次导出
+  #   # pubmed 不支持: screenshot / export_csv.fields 自定义字段(PubMed CSV 字段固定)
 """
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")

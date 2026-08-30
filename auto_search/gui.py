@@ -51,7 +51,7 @@ def build_raw_config(base_raw: dict, v: dict) -> dict:
     t.update(
         name=t.get("name") or "embase_task",
         site=t.get("site") or "chaoslib",
-        database=t.get("database") or "embase",
+        database=v["database"],
         query=v["query"],
         date_filter=df,
         per_page=v["per_page"],
@@ -119,6 +119,17 @@ class App:
         self.v_user.grid(row=row, column=1, sticky="ew", pady=2); row += 1
         label("chaoslib 密码", row); self.v_pass = ttk.Entry(main, show="*")
         self.v_pass.grid(row=row, column=1, sticky="ew", pady=2); row += 1
+
+        # ---- 数据库 ----
+        label("目标数据库", row)
+        db_frame = ttk.Frame(main)
+        self.v_database = ttk.Combobox(db_frame, values=["embase", "pubmed"],
+                                       width=10, state="readonly")
+        self.v_database.pack(side="left")
+        self.v_database.set(str(task0.get("database") or "embase"))
+        ttk.Label(db_frame, text="Pubmed 流程: 检索+日期筛选+打印+全量CSV(无截图/字段勾选)",
+                  foreground="#888").pack(side="left", padx=8)
+        db_frame.grid(row=row, column=1, sticky="w", pady=2); row += 1
 
         # ---- 检索式 ----
         label("检索式", row)
@@ -235,6 +246,7 @@ class App:
         return {
             "username": self.v_user.get().strip(),
             "password": self.v_pass.get().strip(),
+            "database": self.v_database.get().strip() or "embase",
             "query": self.v_query.get("1.0", "end").strip(),
             "df_enabled": self.v_df_enabled.get(),
             "df_type": _DATE_TYPE_VALUES.get(self.v_df_type.get(), "records_added"),
