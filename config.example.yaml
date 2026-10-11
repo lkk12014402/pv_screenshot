@@ -5,6 +5,13 @@ account:
   username: ""      # chaoslib 账号
   password: ""      # chaoslib 密码
 
+# 直连站点账号（不经过 chaoslib 的站点，如万方）
+# 也可用环境变量 AUTOSEARCH_WANFANG_USERNAME / AUTOSEARCH_WANFANG_PASSWORD
+accounts:
+  wanfang:
+    username: ""    # 万方账号(手机号)
+    password: ""    # 万方密码
+
 # ================= 浏览器 =================
 browser:
   headless: true        # true=无头后台运行(可导出PDF); false=显示浏览器窗口
@@ -63,6 +70,21 @@ tasks:
         - "Author names"
         - "Digital Object Identifier (DOI)"
         - "Medline PMID"
+
+  # ---- 万方示例（取消注释即可用）----
+  # 流程: 登录万方 -> 高级检索 -> 专业检索 -> 文献类型全部 -> 检索
+  #       -> 结果页每页50条 -> 只打印第1页PDF -> 逐页全选 -> 批量引用导出XLS
+  #       (单次最多500条, 满500先导出清除再继续) -> 合并 export_all.xlsx
+  # - name: wanfang_demo
+  #   site: wanfang
+  #   database: wanfang
+  #   query: "主题:(镓68 OR 68Ga OR 镓发生器 OR 锗镓发生器 OR GalenVita OR 68Ga发生器) and 主题:(不良事件 OR 不良反应 OR 副作用 OR 毒性 OR 安全性)"
+  #   per_page: 50                # 万方仅支持 20/30/50
+  #   max_pages: 0
+  #   screenshot: {enabled: true}   # 结果页整页截图
+  #   print_pdf: {enabled: true}    # 只打印第 1 页
+  #   export_csv: {enabled: true}   # 万方下此开关=批量引用导出XLS
+  #   # 万方不支持: date_filter / export_csv.fields 自定义字段
 
   # ---- Pubmed 示例（取消注释即可用; 流程: 检索+Custom Range日期筛选+逐页打印+全量CSV） ----
   # - name: pubmed_demo

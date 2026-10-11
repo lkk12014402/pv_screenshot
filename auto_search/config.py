@@ -23,9 +23,16 @@ account:
   username: ""      # chaoslib 账号
   password: ""      # chaoslib 密码
 
+# 直连站点账号（不经过 chaoslib 的站点，如万方）
+# 也可用环境变量 AUTOSEARCH_WANFANG_USERNAME / AUTOSEARCH_WANFANG_PASSWORD
+accounts:
+  wanfang:
+    username: ""    # 万方账号(手机号)
+    password: ""    # 万方密码
+
 # ================= 浏览器 =================
 browser:
-  headless: true        # true=无头后台运行(可导出PDF); false=显示浏览器窗口
+  headless: true        # true=无头后台运行; false=显示浏览器窗口(万方滑块验证建议有头)
   channel: msedge       # 使用系统浏览器: msedge / chrome; 填 chromium 则用内置浏览器
   slow_mo: 0            # 每个操作(点击/输入)之间的间隔毫秒数, 有头观察时可设 300~800
   # user_agent: ""      # 高级选项: 自定义 UA，一般留空即可
@@ -42,8 +49,8 @@ task_retries: 1
 tasks:
   # ---- Embase 示例 ----
   - name: embase_demo             # 任务名，用于输出子目录命名
-    site: chaoslib                # 站点: 目前支持 chaoslib
-    database: embase              # 数据库: embase / pubmed
+    site: chaoslib                # 站点: chaoslib(经WebVPN) / wanfang(万方直连)
+    database: embase              # 数据库: embase / pubmed / wanfang
     query: "'adverse event'/exp OR 'adverse event'"   # Embase 检索式
 
     # 检索日期范围（对应结果页 Date 面板，设置后再点搜索按钮）
@@ -81,6 +88,21 @@ tasks:
         - "Author names"
         - "Digital Object Identifier (DOI)"
         - "Medline PMID"
+
+  # ---- 万方示例（取消注释即可用）----
+  # 流程: 登录万方 -> 高级检索 -> 专业检索 -> 文献类型全部 -> 检索
+  #       -> 结果页每页50条 -> 只打印第1页PDF -> 逐页全选 -> 批量引用导出XLS
+  #       (单次最多500条, 满500先导出清除再继续) -> 合并 export_all.xlsx
+  # - name: wanfang_demo
+  #   site: wanfang
+  #   database: wanfang
+  #   query: "主题:(镓68 OR 68Ga OR 镓发生器 OR 锗镓发生器 OR GalenVita OR 68Ga发生器) and 主题:(不良事件 OR 不良反应 OR 副作用 OR 毒性 OR 安全性)"
+  #   per_page: 50                # 万方仅支持 20/30/50
+  #   max_pages: 0
+  #   screenshot: {enabled: true}   # 结果页整页截图
+  #   print_pdf: {enabled: true}    # 只打印第 1 页
+  #   export_csv: {enabled: true}   # 万方下此开关=批量引用导出XLS
+  #   # 万方不支持: date_filter / export_csv.fields 自定义字段
 
   # ---- Pubmed 示例（取消注释即可用; 流程: 检索+Custom Range日期筛选+逐页打印+全量CSV） ----
   # - name: pubmed_demo
@@ -171,6 +193,7 @@ class AppConfig:
     output_dir: Path
     tasks: list[TaskConfig]
     task_retries: int = 1  # 任务失败后整体重试次数（仅对疑似临时网络问题生效）
+    accounts: dict[str, AccountConfig] = field(default_factory=dict)  # 分站账号(如 wanfang)
 
 
 def _expect_mapping(value, where: str) -> dict:
@@ -219,7 +242,8 @@ def _parse_task(raw, idx: int) -> TaskConfig:
     )
     if ex.fields_by not in ("column", "row"):
         raise ConfigError(f"{where}.export_csv.fields_by 只能是 column 或 row")
-    if ex.enabled and not ex.fields:
+    # 仅 embase 需要在导出对话框勾选字段；pubmed/wanfang 导出用不到 fields
+    if ex.enabled and not ex.fields and str(raw.get("database", "embase")).strip() == "embase":
         raise ConfigError(f"{where}.export_csv.fields 不能为空（导出时需要勾选字段）")
 
     task = TaskConfig(
@@ -261,13 +285,16 @@ def parse_raw_config(raw: dict, base_path: Path, prompt: bool = True) -> AppConf
     )
     account.username = os.environ.get("AUTOSEARCH_USERNAME", account.username).strip()
     account.password = os.environ.get("AUTOSEARCH_PASSWORD", account.password).strip()
-    if prompt:
-        if not account.username:
-            account.username = input("请输入 chaoslib 账号: ").strip()
-        if not account.password:
-            account.password = getpass.getpass("请输入 chaoslib 密码: ").strip()
-    elif not account.username or not account.password:
-        raise ConfigError("账号或密码为空，请填写")
+
+    # 分站账号: accounts.<site>.username/password，环境变量 AUTOSEARCH_<SITE>_USERNAME/PASSWORD
+    accounts: dict[str, AccountConfig] = {}
+    for site_name, site_acc in (_expect_mapping(raw.get("accounts") or {}, "accounts")).items():
+        site_acc = _expect_mapping(site_acc, f"accounts.{site_name}")
+        u = str(site_acc.get("username") or "").strip()
+        p = str(site_acc.get("password") or "").strip()
+        u = os.environ.get(f"AUTOSEARCH_{site_name.upper()}_USERNAME", u).strip()
+        p = os.environ.get(f"AUTOSEARCH_{site_name.upper()}_PASSWORD", p).strip()
+        accounts[str(site_name)] = AccountConfig(u, p)
 
     br_raw = _expect_mapping(raw.get("browser") or {}, "browser")
     browser = BrowserConfig(
@@ -294,10 +321,24 @@ def parse_raw_config(raw: dict, base_path: Path, prompt: bool = True) -> AppConf
         raise ConfigError("tasks 必须是非空列表")
     tasks = [_parse_task(t, i) for i, t in enumerate(tasks_raw)]
 
+    # 按任务涉及的站点校验账号：chaoslib 用主 account，其他站点用 accounts.<site>
+    def _site_account(site: str) -> AccountConfig:
+        return accounts.get(site) or account
+
+    for site in {t.site for t in tasks}:
+        acc = _site_account(site)
+        if prompt:
+            if not acc.username:
+                acc.username = input(f"请输入 {site} 账号: ").strip()
+            if not acc.password:
+                acc.password = getpass.getpass(f"请输入 {site} 密码: ").strip()
+        elif not acc.username or not acc.password:
+            raise ConfigError(f"{site} 站点的账号或密码为空，请填写")
+
     task_retries = max(0, int(raw.get("task_retries", 1)))
 
     return AppConfig(account=account, browser=browser, output_dir=out_path,
-                     tasks=tasks, task_retries=task_retries)
+                     tasks=tasks, task_retries=task_retries, accounts=accounts)
 
 
 def load_config(path: Path, output_dir: str | None = None,

@@ -29,9 +29,12 @@ _DATE_TYPE_VALUES = {v: k for k, v in _DATE_TYPE_LABELS.items()}
 _DB_FLOW_HINTS = {
     "embase": "流程: 检索+日期过滤+截图+逐页打印PDF+逐页导出CSV",
     "pubmed": "流程: 检索+日期筛选+打印PDF+全量CSV导出(无截图/字段勾选)",
-    "wanfang": "暂未实现自动流程，仅预填检索式",
+    "wanfang": "流程: 登录+专业检索+每页50条+打印第1页PDF+分批导出XLS(500条/批)",
     "cnki": "暂未实现自动流程，仅预填检索式",
 }
+
+# 数据库 -> 站点(决定登录方式): embase/pubmed 走 chaoslib WebVPN，万方直连
+_DB_SITE = {"embase": "chaoslib", "pubmed": "chaoslib", "wanfang": "wanfang", "cnki": "cnki"}
 
 
 def build_raw_config(base_raw: dict, v: dict) -> dict:
@@ -40,6 +43,11 @@ def build_raw_config(base_raw: dict, v: dict) -> dict:
     acc = dict(raw.get("account") or {})
     acc.update(username=v["username"], password=v["password"])
     raw["account"] = acc
+    accounts = dict(raw.get("accounts") or {})
+    wf_acc = dict(accounts.get("wanfang") or {})
+    wf_acc.update(username=v["wf_username"], password=v["wf_password"])
+    accounts["wanfang"] = wf_acc
+    raw["accounts"] = accounts
     br = dict(raw.get("browser") or {})
     br.update(headless=v["headless"], channel=v["channel"], slow_mo=v["slow_mo"])
     raw["browser"] = br
@@ -60,7 +68,7 @@ def build_raw_config(base_raw: dict, v: dict) -> dict:
               fields=[f for f in v["csv_fields"] if f])
     t.update(
         name=t.get("name") or "embase_task",
-        site=t.get("site") or "chaoslib",
+        site=_DB_SITE.get(v["database"], t.get("site") or "chaoslib"),
         database=v["database"],
         query=v["query"],
         date_filter=df,
@@ -129,6 +137,10 @@ class App:
         self.v_user.grid(row=row, column=1, sticky="ew", pady=2); row += 1
         label("chaoslib 密码", row); self.v_pass = ttk.Entry(main, show="*")
         self.v_pass.grid(row=row, column=1, sticky="ew", pady=2); row += 1
+        label("万方账号", row); self.v_wf_user = ttk.Entry(main)
+        self.v_wf_user.grid(row=row, column=1, sticky="ew", pady=2); row += 1
+        label("万方密码", row); self.v_wf_pass = ttk.Entry(main, show="*")
+        self.v_wf_pass.grid(row=row, column=1, sticky="ew", pady=2); row += 1
 
         # ---- 药物 ----
         label("药物", row)
@@ -153,7 +165,6 @@ class App:
         self.v_db_hint = ttk.Label(db_frame, text="", foreground="#888")
         self.v_db_hint.pack(side="left", padx=8)
         db_frame.grid(row=row, column=1, sticky="w", pady=2); row += 1
-        self._update_db_hint()
 
         # ---- 检索式 ----
         label("检索式", row)
@@ -224,7 +235,8 @@ class App:
         self.v_pdf_hf = tk.BooleanVar(value=bool(pp0.get("header_footer", True)))
         ttk.Checkbutton(act_frame, text="PDF 页眉页脚", variable=self.v_pdf_hf).pack(side="left", padx=(10, 0))
         self.v_csv = tk.BooleanVar(value=bool(ex0.get("enabled", True)))
-        ttk.Checkbutton(act_frame, text="逐页导出 CSV", variable=self.v_csv).pack(side="left", padx=(10, 0))
+        self.cb_csv = ttk.Checkbutton(act_frame, text="逐页导出 CSV", variable=self.v_csv)
+        self.cb_csv.pack(side="left", padx=(10, 0))
         ttk.Label(act_frame, text="Fields by").pack(side="left", padx=(12, 2))
         self.v_fields_by = ttk.Combobox(act_frame, values=["column", "row"], width=7, state="readonly")
         self.v_fields_by.pack(side="left")
@@ -251,11 +263,15 @@ class App:
         main.rowconfigure(row, weight=1)
 
         # 预填账号密码和检索式、字段
+        wf_acc0 = (self.base_raw.get("accounts") or {}).get("wanfang") or {}
         self.v_user.insert(0, str(acc0.get("username") or ""))
         self.v_pass.insert(0, str(acc0.get("password") or ""))
+        self.v_wf_user.insert(0, str(wf_acc0.get("username") or ""))
+        self.v_wf_pass.insert(0, str(wf_acc0.get("password") or ""))
         self.v_query.insert("1.0", str(task0.get("query") or ""))
         self.v_fields.insert("1.0", "\n".join(str(f) for f in (ex0.get("fields") or [])))
 
+        self._update_db_hint()
         self.root.after(150, self._drain_logs)
 
     # ---------------- 界面动作 ----------------
@@ -275,7 +291,11 @@ class App:
         return label or "embase"
 
     def _update_db_hint(self):
-        self.v_db_hint.config(text=_DB_FLOW_HINTS.get(self._db_key(), ""))
+        key = self._db_key()
+        self.v_db_hint.config(text=_DB_FLOW_HINTS.get(key, ""))
+        # 「逐页导出CSV」复选框文案随数据库切换(万方是批量引用导出XLS)
+        self.cb_csv.config(
+            text="分批导出 XLS（批量引用）" if key == "wanfang" else "逐页导出 CSV")
 
     def _on_database_changed(self):
         self._update_db_hint()
@@ -296,6 +316,8 @@ class App:
         return {
             "username": self.v_user.get().strip(),
             "password": self.v_pass.get().strip(),
+            "wf_username": self.v_wf_user.get().strip(),
+            "wf_password": self.v_wf_pass.get().strip(),
             "database": self._db_key(),
             "query": self.v_query.get("1.0", "end").strip(),
             "df_enabled": self.v_df_enabled.get(),

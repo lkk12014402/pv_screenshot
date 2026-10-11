@@ -64,7 +64,11 @@ async def _run_task(browser, cfg: AppConfig, task, logger) -> bool:
 
         context = await new_context(browser, cfg)
         try:
-            page = await site.login(context, cfg.account, outdir, tlog)
+            # 站点账号: accounts.<site> 优先，缺省用主 account(chaoslib)
+            account = cfg.accounts.get(task.site) or cfg.account
+            if not account.username:
+                account = cfg.account
+            page = await site.login(context, account, outdir, tlog)
             flow_page = await site.open_database(
                 page, task.database, tlog, category=task.category)
             flow = site.flows[task.database]()

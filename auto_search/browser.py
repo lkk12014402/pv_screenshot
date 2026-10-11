@@ -47,18 +47,24 @@ async def launch_browser(pw, cfg: AppConfig, logger: logging.Logger) -> Browser:
         kwargs["proxy"] = proxy
         logger.info("检测到代理环境变量，浏览器将使用代理: %s", proxy["server"])
     channel = cfg.browser.channel
+
+    def _mark(browser: Browser) -> Browser:
+        # 供站点流程判断当前是否有界面（滑块验证的手动兜底等场景）
+        browser._auto_search_headless = cfg.browser.headless  # type: ignore[attr-defined]
+        return browser
+
     try:
         if channel in ("msedge", "chrome"):
             logger.info("使用系统浏览器 channel=%s (headless=%s)", channel, cfg.browser.headless)
-            return await pw.chromium.launch(channel=channel, **kwargs)
+            return _mark(await pw.chromium.launch(channel=channel, **kwargs))
         # channel="chromium": 完整版 Chromium 新无头模式，指纹更接近真实浏览器，
         # 比默认的 headless shell 更不容易被 Cloudflare 等风控识别
         logger.info("使用内置完整版 Chromium (headless=%s)", cfg.browser.headless)
-        return await pw.chromium.launch(channel="chromium", **kwargs)
+        return _mark(await pw.chromium.launch(channel="chromium", **kwargs))
     except Exception as e:  # noqa: BLE001
         logger.warning("channel=%s 启动失败(%s)，回退到内置 Chromium headless shell", channel, e)
         try:
-            return await pw.chromium.launch(**kwargs)
+            return _mark(await pw.chromium.launch(**kwargs))
         except Exception as e2:  # noqa: BLE001
             if "Executable doesn't exist" in str(e2):
                 raise RuntimeError(
