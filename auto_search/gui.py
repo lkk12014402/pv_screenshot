@@ -17,11 +17,21 @@ from tkinter import filedialog, messagebox, scrolledtext, ttk
 import yaml
 
 from .config import CONFIG_TEMPLATE, ConfigError, parse_raw_config
+from .presets import DATABASE_LABELS, DRUG_PRESETS, preset_query
 from .runner import run
+from .sites import SITES
 from .utils import register_log_handler
 
 _DATE_TYPE_LABELS = {"records_added": "入库日期 (Records added)", "publication_years": "发表年份 (Publication years)"}
 _DATE_TYPE_VALUES = {v: k for k, v in _DATE_TYPE_LABELS.items()}
+
+# 各数据库流程能力提示（显示在数据库下拉框旁）
+_DB_FLOW_HINTS = {
+    "embase": "流程: 检索+日期过滤+截图+逐页打印PDF+逐页导出CSV",
+    "pubmed": "流程: 检索+日期筛选+打印PDF+全量CSV导出(无截图/字段勾选)",
+    "wanfang": "暂未实现自动流程，仅预填检索式",
+    "cnki": "暂未实现自动流程，仅预填检索式",
+}
 
 
 def build_raw_config(base_raw: dict, v: dict) -> dict:
@@ -120,16 +130,30 @@ class App:
         label("chaoslib 密码", row); self.v_pass = ttk.Entry(main, show="*")
         self.v_pass.grid(row=row, column=1, sticky="ew", pady=2); row += 1
 
+        # ---- 药物 ----
+        label("药物", row)
+        drug_frame = ttk.Frame(main)
+        self.v_drug = ttk.Combobox(drug_frame, values=list(DRUG_PRESETS),
+                                   width=28, state="readonly")
+        self.v_drug.pack(side="left")
+        self.v_drug.bind("<<ComboboxSelected>>", lambda _e: self._fill_preset_query())
+        ttk.Label(drug_frame, text="选好药物和数据库后自动填入对应检索式(可再手动修改)",
+                  foreground="#888").pack(side="left", padx=8)
+        drug_frame.grid(row=row, column=1, sticky="w", pady=2); row += 1
+
         # ---- 数据库 ----
         label("目标数据库", row)
         db_frame = ttk.Frame(main)
-        self.v_database = ttk.Combobox(db_frame, values=["embase", "pubmed"],
+        self.v_database = ttk.Combobox(db_frame, values=list(DATABASE_LABELS.values()),
                                        width=10, state="readonly")
         self.v_database.pack(side="left")
-        self.v_database.set(str(task0.get("database") or "embase"))
-        ttk.Label(db_frame, text="Pubmed 流程: 检索+日期筛选+打印+全量CSV(无截图/字段勾选)",
-                  foreground="#888").pack(side="left", padx=8)
+        self.v_database.set(DATABASE_LABELS.get(str(task0.get("database") or "embase"),
+                                                DATABASE_LABELS["embase"]))
+        self.v_database.bind("<<ComboboxSelected>>", lambda _e: self._on_database_changed())
+        self.v_db_hint = ttk.Label(db_frame, text="", foreground="#888")
+        self.v_db_hint.pack(side="left", padx=8)
         db_frame.grid(row=row, column=1, sticky="w", pady=2); row += 1
+        self._update_db_hint()
 
         # ---- 检索式 ----
         label("检索式", row)
@@ -242,11 +266,37 @@ class App:
             self.v_outdir.delete(0, "end")
             self.v_outdir.insert(0, d)
 
+    def _db_key(self) -> str:
+        """数据库下拉框当前显示名 -> 内部键(embase/pubmed/wanfang/cnki)。"""
+        label = self.v_database.get().strip()
+        for k, v in DATABASE_LABELS.items():
+            if v == label:
+                return k
+        return label or "embase"
+
+    def _update_db_hint(self):
+        self.v_db_hint.config(text=_DB_FLOW_HINTS.get(self._db_key(), ""))
+
+    def _on_database_changed(self):
+        self._update_db_hint()
+        self._fill_preset_query()
+
+    def _fill_preset_query(self):
+        """选了药物和数据库后，把对应预设检索式填入检索式框(用户可再改)。"""
+        drug = self.v_drug.get().strip()
+        if not drug:
+            return
+        query = preset_query(drug, self._db_key())
+        if not query:
+            return
+        self.v_query.delete("1.0", "end")
+        self.v_query.insert("1.0", query)
+
     def _collect(self) -> dict:
         return {
             "username": self.v_user.get().strip(),
             "password": self.v_pass.get().strip(),
-            "database": self.v_database.get().strip() or "embase",
+            "database": self._db_key(),
             "query": self.v_query.get("1.0", "end").strip(),
             "df_enabled": self.v_df_enabled.get(),
             "df_type": _DATE_TYPE_VALUES.get(self.v_df_type.get(), "records_added"),
@@ -277,6 +327,14 @@ class App:
             cfg = self._build_cfg()
         except (ConfigError, ValueError) as e:
             messagebox.showerror("配置有误", str(e))
+            return
+        site = SITES.get(cfg.tasks[0].site)
+        if site is None or cfg.tasks[0].database not in site.flows:
+            supported = ", ".join(site.flows) if site else "-"
+            messagebox.showerror(
+                "暂不支持",
+                f"数据库 {cfg.tasks[0].database} 的自动流程暂未实现（当前支持: {supported}）。\n"
+                "检索式已预填到检索式框，可手动复制到对应网站检索。")
             return
         self.btn_run.state(["disabled"])
         self.v_status.config(text="运行中…")
