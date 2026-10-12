@@ -11,6 +11,10 @@ accounts:
   wanfang:
     username: ""    # 万方账号(手机号)
     password: ""    # 万方密码
+    # 可选: Cookie 登录文件(Cookie-Editor 扩展导出的 JSON)。配置了则优先用 Cookie 登录，
+    # 跳过账号密码和滑块验证(滑块被风控拦截时的推荐做法)。相对路径相对本配置文件目录。
+    # 获取方法: 浏览器登录万方 -> Cookie-Editor 扩展 -> Export -> JSON -> 保存为 wanfang_cookies.json
+    # cookies_file: "wanfang_cookies.json"
 
 # ================= 浏览器 =================
 browser:

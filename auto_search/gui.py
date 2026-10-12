@@ -45,7 +45,8 @@ def build_raw_config(base_raw: dict, v: dict) -> dict:
     raw["account"] = acc
     accounts = dict(raw.get("accounts") or {})
     wf_acc = dict(accounts.get("wanfang") or {})
-    wf_acc.update(username=v["wf_username"], password=v["wf_password"])
+    wf_acc.update(username=v["wf_username"], password=v["wf_password"],
+                  cookies_file=v["wf_cookies_file"])
     accounts["wanfang"] = wf_acc
     raw["accounts"] = accounts
     br = dict(raw.get("browser") or {})
@@ -141,6 +142,16 @@ class App:
         self.v_wf_user.grid(row=row, column=1, sticky="ew", pady=2); row += 1
         label("万方密码", row); self.v_wf_pass = ttk.Entry(main, show="*")
         self.v_wf_pass.grid(row=row, column=1, sticky="ew", pady=2); row += 1
+
+        # ---- 万方 cookies(可选, 优先于账号密码) ----
+        label("万方cookies文件", row)
+        wf_ck_frame = ttk.Frame(main)
+        self.v_wf_cookies = ttk.Entry(wf_ck_frame)
+        self.v_wf_cookies.pack(side="left", fill="x", expand=True)
+        ttk.Button(wf_ck_frame, text="浏览…", command=self._pick_wf_cookies).pack(side="left", padx=4)
+        ttk.Label(wf_ck_frame, text="可选: Cookie-Editor 导出的 JSON, 填了就免账号密码(绕开滑块)",
+                  foreground="#888").pack(side="left", padx=6)
+        wf_ck_frame.grid(row=row, column=1, sticky="ew", pady=2); row += 1
 
         # ---- 药物 ----
         label("药物", row)
@@ -268,6 +279,7 @@ class App:
         self.v_pass.insert(0, str(acc0.get("password") or ""))
         self.v_wf_user.insert(0, str(wf_acc0.get("username") or ""))
         self.v_wf_pass.insert(0, str(wf_acc0.get("password") or ""))
+        self.v_wf_cookies.insert(0, str(wf_acc0.get("cookies_file") or ""))
         self.v_query.insert("1.0", str(task0.get("query") or ""))
         self.v_fields.insert("1.0", "\n".join(str(f) for f in (ex0.get("fields") or [])))
 
@@ -281,6 +293,13 @@ class App:
         if d:
             self.v_outdir.delete(0, "end")
             self.v_outdir.insert(0, d)
+
+    def _pick_wf_cookies(self):
+        f = filedialog.askopenfilename(
+            title="选择万方 cookies 文件", filetypes=[("JSON 文件", "*.json")])
+        if f:
+            self.v_wf_cookies.delete(0, "end")
+            self.v_wf_cookies.insert(0, f)
 
     def _db_key(self) -> str:
         """数据库下拉框当前显示名 -> 内部键(embase/pubmed/wanfang/cnki)。"""
@@ -318,6 +337,7 @@ class App:
             "password": self.v_pass.get().strip(),
             "wf_username": self.v_wf_user.get().strip(),
             "wf_password": self.v_wf_pass.get().strip(),
+            "wf_cookies_file": self.v_wf_cookies.get().strip(),
             "database": self._db_key(),
             "query": self.v_query.get("1.0", "end").strip(),
             "df_enabled": self.v_df_enabled.get(),

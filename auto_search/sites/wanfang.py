@@ -26,7 +26,6 @@ import random
 import re
 import time
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from playwright.async_api import BrowserContext, Page
 
@@ -52,14 +51,16 @@ class S:  # noqa: D101 - 选择器集中处
     TYPE_ALL = ".resource-tab .resource-item.checkAll"   # 文献类型-全部
     QUERY_INPUT = "#queryInput"                    # 专业检索大文本框
     SUBMIT = "span.submit-btn"                     # 检索按钮
-    # 结果页
-    TOTAL_NUMBER = "span.total-number span.mark-number"  # 找到 X 条结果
+    # 结果页(结果在检索页内联渲染, URL 不变)
+    TOTAL_NUMBER = "span.total-number span.mark-number"  # 找到 X 条文献
     LIST_MARK = ".normal-list"                     # 结果列表容器
-    CHECK_ALL = ".bottom-check-bar .ivu-checkbox"  # 全选本页
-    CHECK_ALL2 = ".common-area .ivu-checkbox"      # 顶部批量选择(备选)
-    SELECTED_TIP = ".bottom-check-bar"             # 含"已选择 X 条"
-    CLEAR_BTN = ".bottom-check-bar .clear-btn"     # 清除已选
-    EXPORT_BTN = ".bottom-check-bar .export-btn"   # 批量引用
+    PAGE_SIZE_SELECT = ".wf-select.right-items .select-box"  # "显示 N 条" 下拉
+    PAGE_SIZE_CUR = ".wf-select.right-items .cur-text"
+    PAGINATION = ".bottom-pagination"              # 底部分页器
+    CHECK_ALL = ".top-check-bar .ivu-checkbox"     # 全选本页(顶部勾选栏)
+    SELECTED_TIP = ".top-check-bar"                # 含"已选择 X 条"
+    CLEAR_BTN = ".top-check-bar .clear-btn"        # 清除已选
+    EXPORT_BTN = ".top-check-bar .export-btn"      # 批量引用
     EXPORT_PAGE_MARK = "/export"                   # 导出页 url 特征
     EXPORT_TAB_CX = "查新格式"                       # 导出页 tab(有XLS按钮)
     EXPORT_XLS_TEXT = "导出XLS"
@@ -120,6 +121,10 @@ class WanfangSite(SitePlugin):
 
     async def login(self, context: BrowserContext, account: AccountConfig,
                     outdir: Path, logger: logging.Logger) -> Page:
+        # Cookie 登录(优先): 配置了 cookies_file 就注入 cookie 跳过账号密码和滑块
+        if account.cookies_file:
+            return await self._login_by_cookies(context, account, outdir, logger)
+
         page = await context.new_page()
         logger.info("打开 %s", self.base_url)
         await page.goto(self.base_url, wait_until="commit", timeout=60000)
@@ -192,6 +197,58 @@ class WanfangSite(SitePlugin):
                 "请改用有头模式：界面取消勾选「无头运行」或 config.yaml 设 headless: false，"
                 "届时按日志提示手动拖动滑块即可")
         raise RuntimeError("登录超时：长时间未确认登录成功，请检查网络或改有头模式重试")
+
+    async def _login_by_cookies(self, context: BrowserContext, account: AccountConfig,
+                                outdir: Path, logger: logging.Logger) -> Page:
+        """Cookie 登录: 注入 Cookie-Editor 导出的 JSON(或 Playwright storage_state)。
+
+        文件放在 config.yaml(exe 同目录)下用相对路径即可, 如 wanfang_cookies.json。
+        """
+        import json
+        path = Path(account.cookies_file)
+        logger.info("使用 Cookie 登录: %s", path)
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(f"Cookie 文件读取失败: {e}")
+        cookies = raw.get("cookies") if isinstance(raw, dict) else raw
+        if not isinstance(cookies, list) or not cookies:
+            raise RuntimeError("Cookie 文件格式不对：应为 Cookie-Editor 导出的 JSON 数组")
+        await context.add_cookies(self._to_pw_cookies(cookies))
+        logger.info("已注入 %d 个 cookie", len(cookies))
+
+        page = await context.new_page()
+        await page.goto(self.base_url, wait_until="commit", timeout=60000)
+        if not await self._wait_home(page, logger):
+            raise RuntimeError("万方首页长时间未渲染，请检查网络")
+        body = await page.inner_text("body")
+        if "登录 / 注册" in body or "登录/注册" in body:
+            await dump_debug(page, outdir, "cookie_login_expired", logger)
+            raise RuntimeError(
+                "Cookie 登录未生效（cookie 已过期或不完整）。"
+                "请在浏览器里重新登录万方，再用 Cookie-Editor 导出最新的 JSON 覆盖该文件")
+        logger.info("Cookie 登录成功")
+        return page
+
+    @staticmethod
+    def _to_pw_cookies(raw: list) -> list:
+        """Cookie-Editor JSON -> Playwright cookies。"""
+        out = []
+        for c in raw:
+            ck = {
+                "name": c["name"],
+                "value": c["value"],
+                "domain": c.get("domain", ".wanfangdata.com.cn"),
+                "path": c.get("path", "/"),
+                "httpOnly": bool(c.get("httpOnly", False)),
+                "secure": bool(c.get("secure", False)),
+            }
+            ss = (c.get("sameSite") or "").lower()
+            ck["sameSite"] = {"strict": "Strict", "lax": "Lax", "no_restriction": "None"}.get(ss, "Lax")
+            if not c.get("session", True) and c.get("expirationDate"):
+                ck["expires"] = float(c["expirationDate"])
+            out.append(ck)
+        return out
 
     async def _wait_login_outcome(self, page: Page, frame, outdir: Path,
                                   logger: logging.Logger, timeout: int = 25) -> str:
@@ -449,6 +506,8 @@ class WanfangFlow(Flow):
 
             per_page = self._clamp_page_size(task.per_page, logger)
             await self._set_page_size(page, per_page, logger)
+            # 以界面实际生效的每页条数为准(设置失败时按实际值算页数, 保证导全)
+            per_page = await self._read_actual_page_size(page, per_page, logger)
             total_pages = math.ceil(total / per_page)
             if task.max_pages > 0:
                 total_pages = min(total_pages, task.max_pages)
@@ -461,15 +520,16 @@ class WanfangFlow(Flow):
 
             # 只打印第 1 页 PDF
             if task.print_pdf.enabled:
-                await self._goto_page(page, 1, per_page, logger)
+                await self._goto_page(page, 1, logger)
                 await self._print_first_page(page, task, outdir, logger, headless)
 
             # 分批导出 XLS
             if task.export_csv.enabled:  # 万方下此开关表示「批量引用导出XLS」
                 xls_dir = outdir / "xls"
                 files = await self._export_all(page, task, total_pages, per_page, xls_dir, logger)
-                if files:
-                    self._merge_xlsx(xls_dir, logger)
+                if not files:
+                    raise RuntimeError("导出已启用但未导出任何文件，详见上方日志")
+                self._merge_xlsx(xls_dir, logger)
             logger.info("万方任务完成，输出目录: %s", outdir)
         except Exception:
             await dump_debug(page, outdir, "error", logger)
@@ -498,19 +558,21 @@ class WanfangFlow(Flow):
                     .filter(e => e.className.includes('active')).map(e => (e.innerText || '').trim()).join(' ')""")
             logger.info("文献类型已选: %s", active or "(未读到)")
 
-        # 填检索式(优先 #queryInput，兜底最大的可见 textarea)
+        # 填检索式(优先 #queryInput，兜底最大的可见输入框; 原型按元素类型取, 否则 Illegal invocation)
         filled = await page.evaluate(
             """(q) => {
                 let ta = document.querySelector('#queryInput');
-                if (!ta) {
-                    const cands = Array.from(document.querySelectorAll('textarea')).filter(el => {
-                        const r = el.getBoundingClientRect(); return r.width > 400 && r.height > 50;
-                    });
+                if (ta && !('value' in ta)) ta = ta.querySelector('textarea, input') || ta;
+                if (!ta || !('value' in ta)) {
+                    const cands = Array.from(document.querySelectorAll('textarea, input[type=text]'))
+                        .filter(el => { const r = el.getBoundingClientRect(); return r.width > 400 && r.height > 40; });
                     ta = cands[0];
                 }
                 if (!ta) return false;
-                const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-                setter.call(ta, q);
+                const proto = ta.tagName === 'TEXTAREA'
+                    ? window.HTMLTextAreaElement.prototype
+                    : window.HTMLInputElement.prototype;
+                Object.getOwnPropertyDescriptor(proto, 'value').set.call(ta, q);
                 ta.dispatchEvent(new Event('input', {bubbles: true}));
                 ta.dispatchEvent(new Event('change', {bubbles: true}));
                 return true;
@@ -520,34 +582,35 @@ class WanfangFlow(Flow):
             raise LookupError("未找到专业检索输入框")
         logger.info("已填入检索式（%d 字符）", len(task.query))
 
-        # 点检索
+        # 点检索(可能有隐藏副本, 点可见的)
         ok = await page.evaluate(
-            "() => { const el = document.querySelector('%s'); if (el) { el.click(); return true; } return false; }"
-            % S.SUBMIT)
+            """() => {
+                const els = Array.from(document.querySelectorAll('span.submit-btn'));
+                const vis = els.find(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+                if (vis) { vis.click(); return true; }
+                return false;
+            }""")
         if not ok:
             raise LookupError("未找到检索按钮")
         logger.info("已点击检索，等待结果页")
 
-        # 等跳转到结果页(可能先跳 /verify)
-        left = False
-        for _ in range(180):
+        # 点检索后结果在同一页面内联渲染(URL 不变), 等总条数出现
+        rendered = False
+        for _ in range(240):
             if "/verify" in page.url:
                 await site._check_verify_page(page, logger)
                 continue
-            if "advanced-search" not in page.url:
-                left = True
-                break
+            try:
+                if await page.locator(S.TOTAL_NUMBER).count() > 0:
+                    rendered = True
+                    break
+            except Exception:  # noqa: BLE001
+                pass
             await asyncio.sleep(0.5)
-        if not left:
-            await dump_debug(page, Path.cwd(), "search_no_results_page", logger)
-            raise RuntimeError("点击检索后长时间未跳转到结果页，请检查 _debug 快照")
-        for _ in range(120):
-            if await page.locator(S.TOTAL_NUMBER).count() > 0 or \
-                    await page.locator(S.LIST_MARK).count() > 0:
-                break
-            await asyncio.sleep(0.5)
+        if not rendered:
+            raise RuntimeError("点击检索后结果区长时间未渲染，请检查 _debug 快照")
         await wait_ready(page, 5000)
-        logger.info("已进入结果页: %s", page.url[:120])
+        logger.info("结果已渲染: %s", page.url[:120])
 
     async def _read_total(self, page: Page, logger: logging.Logger) -> int:
         for _ in range(60):
@@ -575,23 +638,105 @@ class WanfangFlow(Flow):
         logger.warning("万方每页条数只支持 20/30/50，配置的 %d 已按 50 处理", per_page)
         return 50
 
-    @staticmethod
-    def _set_url_params(url: str, **params) -> str:
-        parts = urlsplit(url)
-        q = dict(parse_qsl(parts.query))
-        q.update({k: str(v) for k, v in params.items()})
-        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(q), parts.fragment))
-
     async def _set_page_size(self, page: Page, per_page: int, logger: logging.Logger) -> None:
-        """URL 参数 s= 控制每页条数；当前已是则跳过。"""
-        cur = dict(parse_qsl(urlsplit(page.url).query)).get("s")
-        if cur == str(per_page):
-            logger.info("每页条数已是 %d", per_page)
-            return
-        await page.goto(self._set_url_params(page.url, s=per_page, p=1),
-                        wait_until="commit", timeout=60000)
-        await self._wait_results(page, logger)
-        logger.info("已设置每页 %d 条", per_page)
+        """点「显示 N 条」下拉 -> 选「每页 X 条」。
+
+        注意: 结果区加载慢时元素长期不稳定, locator.click 的可见性/稳定性检查会超时,
+        这里一律用坐标点击(mouse.click 不做 actionability 检查)。
+        """
+        target_re = re.compile(rf"显示\s*{per_page}\s*条")
+        for attempt in range(3):
+            try:
+                cur = await page.locator(S.PAGE_SIZE_CUR).first.inner_text(timeout=5000)
+                if target_re.search(cur):
+                    logger.info("每页条数已是 %d", per_page)
+                    return
+            except Exception:  # noqa: BLE001
+                pass
+            # 坐标点开下拉
+            bb = await self._box_of(page, S.PAGE_SIZE_SELECT)
+            if not bb:
+                logger.warning("未找到每页条数下拉框，按当前条数继续")
+                return
+            await page.mouse.click(bb["x"] + bb["width"] / 2, bb["y"] + bb["height"] / 2)
+            # 等选项出现
+            opt_bb = None
+            for _ in range(20):
+                await asyncio.sleep(0.5)
+                opt_bb = await self._option_box(page, per_page)
+                if opt_bb:
+                    break
+            if not opt_bb:
+                logger.warning("下拉选项未出现，重试(%d/3)", attempt + 1)
+                continue
+            first_title = await self._first_title(page)
+            await page.mouse.click(opt_bb["x"] + opt_bb["width"] / 2,
+                                   opt_bb["y"] + opt_bb["height"] / 2)
+            # 等生效(文本变化 + 列表刷新)
+            for _ in range(60):
+                await asyncio.sleep(0.5)
+                try:
+                    cur = await page.locator(S.PAGE_SIZE_CUR).first.inner_text(timeout=2000)
+                    if target_re.search(cur) and await self._first_title(page) != first_title:
+                        logger.info("已设置每页 %d 条", per_page)
+                        await self._wait_results(page, logger)
+                        return
+                except Exception:  # noqa: BLE001
+                    pass
+            logger.warning("每页条数未生效(当前: %s)，重试(%d/3)", cur, attempt + 1)
+        logger.warning("每页条数设置多次未生效，按当前条数继续")
+
+    @staticmethod
+    async def _box_of(page: Page, sel: str) -> dict | None:
+        """可见元素的 bounding box(找不到返回 None)。"""
+        try:
+            loc = page.locator(sel).first
+            if await loc.count() == 0:
+                return None
+            bb = await loc.bounding_box()
+            if bb and bb["width"] > 0 and bb["height"] > 0:
+                return bb
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+    async def _option_box(self, page: Page, per_page: int) -> dict | None:
+        """下拉选项「每页 N 条」的 bounding box。"""
+        return await page.evaluate(
+            """(n) => {
+                const root = document.querySelector('.wf-select.right-items');
+                if (!root) return null;
+                const els = Array.from(root.querySelectorAll('.wf-option, [class*=option]'))
+                    .filter(el => (el.innerText || '').replace(/\\s+/g, '').includes(`${n}条`));
+                const vis = els.find(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
+                if (!vis) return null;
+                const r = vis.getBoundingClientRect();
+                return {x: r.x, y: r.y, width: r.width, height: r.height};
+            }""", per_page)
+
+    @staticmethod
+    async def _first_title(page: Page) -> str:
+        """结果列表第一条标题(用作列表刷新的信号)。"""
+        try:
+            return await page.locator(".normal-list .title").first.inner_text(timeout=2000)
+        except Exception:  # noqa: BLE001
+            return ""
+
+    async def _read_actual_page_size(self, page: Page, fallback: int,
+                                     logger: logging.Logger) -> int:
+        """读界面实际生效的每页条数(「显示 N 条」文本)。"""
+        try:
+            cur = await page.locator(S.PAGE_SIZE_CUR).first.inner_text(timeout=5000)
+            m = re.search(r"显示\s*(\d+)\s*条", cur)
+            if m:
+                actual = int(m.group(1))
+                if actual != fallback:
+                    logger.info("实际每页条数为 %d（目标 %d 未生效，按实际值继续）", actual, fallback)
+                return actual
+        except Exception:  # noqa: BLE001
+            pass
+        logger.warning("未能读取实际每页条数，按 %d 继续", fallback)
+        return fallback
 
     async def _wait_results(self, page: Page, logger: logging.Logger) -> None:
         for _ in range(120):
@@ -605,13 +750,55 @@ class WanfangFlow(Flow):
             await asyncio.sleep(0.5)
         logger.warning("结果区等待超时，继续尝试后续步骤")
 
-    async def _goto_page(self, page: Page, n: int, per_page: int, logger: logging.Logger) -> None:
-        cur = dict(parse_qsl(urlsplit(page.url).query)).get("p", "1")
-        if cur == str(n):
-            return
-        await page.goto(self._set_url_params(page.url, p=n, s=per_page),
-                        wait_until="commit", timeout=60000)
-        await self._wait_results(page, logger)
+    async def _current_page(self, page: Page) -> int:
+        try:
+            txt = await page.locator(f"{S.PAGINATION} .pager.active").first.inner_text(timeout=3000)
+            return int(txt.strip())
+        except Exception:  # noqa: BLE001
+            return 1
+
+    async def _goto_page(self, page: Page, n: int, logger: logging.Logger) -> None:
+        """翻页(URL 不带检索式, 只能点分页器): 页码可见直接点, 否则点「下一页」逐步走。
+
+        翻页后必须等列表内容变化(首条标题改变)再返回, 否则后续勾选会点到旧页面的勾选框。
+        """
+        while True:
+            cur = await self._current_page(page)
+            if cur == n:
+                return
+            if cur > n:
+                raise RuntimeError(f"需要回翻到第 {n} 页(当前第 {cur} 页)，不支持")
+            first_title = await self._first_title(page)
+            # 目标页码可见则直接点
+            clicked = await page.evaluate(
+                """(target) => {
+                    const pagers = Array.from(document.querySelectorAll('.bottom-pagination .pager'));
+                    const el = pagers.find(p => (p.innerText || '').trim() === String(target)
+                        && !p.className.includes('active'));
+                    if (el && el.getBoundingClientRect().width > 0) { el.click(); return true; }
+                    return false;
+                }""", n)
+            if not clicked:
+                # 点「下一页」走一步
+                nxt = await page.evaluate(
+                    """() => {
+                        const el = document.querySelector('.bottom-pagination .next');
+                        if (el && el.getBoundingClientRect().width > 0) { el.click(); return true; }
+                        return false;
+                    }""")
+                if not nxt:
+                    raise RuntimeError("翻页失败: 未找到可用页码或「下一页」按钮")
+            # 等列表内容变化(最可靠的刷新信号) + 页码变化
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                await asyncio.sleep(0.5)
+                new_title = await self._first_title(page)
+                new_cur = await self._current_page(page)
+                if new_cur != cur and new_title and new_title != first_title:
+                    break
+            else:
+                logger.warning("翻页后列表未刷新(目标第 %d 页)，继续观察", n)
+            await asyncio.sleep(1.5)
 
     async def _screenshot(self, page: Page, outdir: Path, logger: logging.Logger) -> None:
         path = outdir / "screenshot_results.png"
@@ -640,15 +827,24 @@ class WanfangFlow(Flow):
         return 0
 
     async def _select_current_page(self, page: Page, logger: logging.Logger) -> None:
-        """勾选本页全部条目（bottom-check-bar 的 wf-checkbox）。"""
+        """勾选本页全部条目（顶部勾选栏的全选 checkbox；选择跨页累计）。"""
         before = await self._selected_count(page)
+        # 已是勾选态就不点(选择跨页累计时, 重复点击会变成取消)
+        cls = await page.evaluate(
+            """() => {
+                const cb = document.querySelector('.top-check-bar .ivu-checkbox');
+                return cb ? cb.className : '';
+            }""")
+        if "checked" in cls:
+            logger.info("本页已是全选状态，跳过点击")
+            return
         clicked = await page.evaluate(
             """() => {
-                for (const scope of ['.bottom-check-bar', '.common-area']) {
+                for (const scope of ['.top-check-bar', '.common-area']) {
                     const bar = document.querySelector(scope);
                     if (!bar) continue;
                     const cb = bar.querySelector('.ivu-checkbox');
-                    if (cb) { cb.click(); return true; }
+                    if (cb && cb.getBoundingClientRect().width > 0) { cb.click(); return true; }
                 }
                 return false;
             }""")
@@ -664,7 +860,7 @@ class WanfangFlow(Flow):
     async def _clear_selection(self, page: Page, logger: logging.Logger) -> None:
         clicked = await page.evaluate(
             """() => {
-                const bar = document.querySelector('.bottom-check-bar');
+                const bar = document.querySelector('.top-check-bar');
                 if (!bar) return false;
                 const els = Array.from(bar.querySelectorAll('*')).filter(el =>
                     (el.innerText || '').trim() === '清除' && el.childElementCount <= 1);
@@ -689,7 +885,7 @@ class WanfangFlow(Flow):
         batch_no = 0
         for p in range(1, total_pages + 1):
             logger.info("勾选第 %d/%d 页", p, total_pages)
-            await self._goto_page(page, p, per_page, logger)
+            await self._goto_page(page, p, logger)
             await self._select_current_page(page, logger)
             selected = await self._selected_count(page)
             logger.info("当前已选: %d 条", selected)
@@ -765,22 +961,30 @@ class WanfangFlow(Flow):
                 logger.info("切换到「%s」tab: %s", S.EXPORT_TAB_CX, clicked)
                 await asyncio.sleep(3)
 
-            # 点 导出XLS，捕获下载(ExcelJS 客户端生成 .xlsx, Blob 下载)
+            # 等导出页数据加载完成(loading 遮罩消失; 几百条时生成引文预览较慢)
+            for _ in range(360):  # 最多 3 分钟
+                try:
+                    n_loading = await export_page.evaluate(
+                        """() => Array.from(document.querySelectorAll('div.loading'))
+                            .filter(el => el.getBoundingClientRect().width > 0).length""")
+                except Exception:  # noqa: BLE001
+                    n_loading = 0
+                if n_loading == 0:
+                    break
+                await asyncio.sleep(0.5)
+            else:
+                logger.warning("导出页 loading 遮罩 3 分钟未消失，仍尝试点击")
+
+            # 点 导出XLS(真实点击; JS click 不触发该 Vue 组件的下载)，捕获下载(ExcelJS 客户端生成 .xlsx)
             path = xls_dir / f"batch_{batch_no:03d}.xlsx"
             async with export_page.expect_download(timeout=180000) as dl_info:
-                clicked = await export_page.evaluate(
-                    """() => {
-                        const els = Array.from(document.querySelectorAll('.export-button-item, .option-button, div, span'))
-                            .filter(el => (el.innerText || '').trim() === '导出XLS');
-                        const vis = els.find(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
-                        if (vis) { vis.click(); return true; }
-                        return false;
-                    }""")
-                if not clicked:
-                    raise LookupError("导出页未找到「导出XLS」按钮")
+                btn = export_page.locator(
+                    '.export-button-item:has-text("导出XLS"), .option-button:has-text("导出XLS")').first
+                await btn.wait_for(state="visible", timeout=60000)
+                await btn.click()
             download = await dl_info.value
             await download.save_as(str(path))
-            logger.info("第 %d 批已保存: %s（建议文件名: %s）",
+            logger.info("第 %d 批已保存: %s（站点文件名: %s）",
                         batch_no, path, download.suggested_filename)
             return path
         except Exception as e:  # noqa: BLE001

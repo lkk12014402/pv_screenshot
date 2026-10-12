@@ -29,6 +29,10 @@ accounts:
   wanfang:
     username: ""    # 万方账号(手机号)
     password: ""    # 万方密码
+    # 可选: Cookie 登录文件(Cookie-Editor 扩展导出的 JSON)。配置了则优先用 Cookie 登录，
+    # 跳过账号密码和滑块验证(滑块被风控拦截时的推荐做法)。相对路径相对本配置文件目录。
+    # 获取方法: 浏览器登录万方 -> Cookie-Editor 扩展 -> Export -> JSON -> 保存为 wanfang_cookies.json
+    # cookies_file: "wanfang_cookies.json"
 
 # ================= 浏览器 =================
 browser:
@@ -129,6 +133,9 @@ _YEAR_RE = re.compile(r"^\d{4}$")
 class AccountConfig:
     username: str = ""
     password: str = ""
+    # 可选: Cookie 登录文件(Cookie-Editor 导出的 JSON 或 Playwright storage_state),
+    # 配置了则优先用 Cookie 登录, 跳过账号密码和滑块验证
+    cookies_file: str = ""
 
 
 @dataclass
@@ -287,6 +294,7 @@ def parse_raw_config(raw: dict, base_path: Path, prompt: bool = True) -> AppConf
     account.password = os.environ.get("AUTOSEARCH_PASSWORD", account.password).strip()
 
     # 分站账号: accounts.<site>.username/password，环境变量 AUTOSEARCH_<SITE>_USERNAME/PASSWORD
+    # accounts.<site>.cookies_file: Cookie 登录文件(优先于账号密码)
     accounts: dict[str, AccountConfig] = {}
     for site_name, site_acc in (_expect_mapping(raw.get("accounts") or {}, "accounts")).items():
         site_acc = _expect_mapping(site_acc, f"accounts.{site_name}")
@@ -294,7 +302,15 @@ def parse_raw_config(raw: dict, base_path: Path, prompt: bool = True) -> AppConf
         p = str(site_acc.get("password") or "").strip()
         u = os.environ.get(f"AUTOSEARCH_{site_name.upper()}_USERNAME", u).strip()
         p = os.environ.get(f"AUTOSEARCH_{site_name.upper()}_PASSWORD", p).strip()
-        accounts[str(site_name)] = AccountConfig(u, p)
+        ck = str(site_acc.get("cookies_file") or "").strip()
+        if ck:
+            ck_path = Path(ck).expanduser()
+            if not ck_path.is_absolute():
+                ck_path = (base_path / ck_path).resolve()
+            if not ck_path.exists():
+                raise ConfigError(f"accounts.{site_name}.cookies_file 不存在: {ck_path}")
+            ck = str(ck_path)
+        accounts[str(site_name)] = AccountConfig(u, p, ck)
 
     br_raw = _expect_mapping(raw.get("browser") or {}, "browser")
     browser = BrowserConfig(
@@ -321,19 +337,22 @@ def parse_raw_config(raw: dict, base_path: Path, prompt: bool = True) -> AppConf
         raise ConfigError("tasks 必须是非空列表")
     tasks = [_parse_task(t, i) for i, t in enumerate(tasks_raw)]
 
-    # 按任务涉及的站点校验账号：chaoslib 用主 account，其他站点用 accounts.<site>
+    # 按任务涉及的站点校验账号：chaoslib 用主 account，其他站点用 accounts.<site>；
+    # 站点配置了 cookies_file 则免账号密码(Cookie 登录)
     def _site_account(site: str) -> AccountConfig:
         return accounts.get(site) or account
 
     for site in {t.site for t in tasks}:
         acc = _site_account(site)
+        if acc.cookies_file:
+            continue
         if prompt:
             if not acc.username:
                 acc.username = input(f"请输入 {site} 账号: ").strip()
             if not acc.password:
                 acc.password = getpass.getpass(f"请输入 {site} 密码: ").strip()
         elif not acc.username or not acc.password:
-            raise ConfigError(f"{site} 站点的账号或密码为空，请填写")
+            raise ConfigError(f"{site} 站点的账号或密码为空，请填写（或配置 accounts.{site}.cookies_file 用 Cookie 登录）")
 
     task_retries = max(0, int(raw.get("task_retries", 1)))
 

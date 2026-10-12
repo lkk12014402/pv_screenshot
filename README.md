@@ -24,6 +24,15 @@ Windows 单文件 exe。
 不过时**有头模式**下按日志提示手动拖一次即可（无头模式被风控拒绝概率高，建议万方
 任务取消勾选「无头运行」）。万方暂不支持 date_filter 日期过滤与导出字段自定义。
 
+万方登录支持两种方式（界面/配置二选一）：
+
+- **账号密码**:`accounts.wanfang.username/password`，可能遇到滑块验证（自动拖拽 +
+  有头手动兜底）。
+- **Cookie 登录（推荐，可绕开滑块）**：在浏览器里手动登录万方，用 Cookie-Editor 扩展
+  导出 JSON（如存为 `wanfang_cookies.json` 放到 exe 同目录），界面「万方cookies文件」
+  选择该文件，或配置 `accounts.wanfang.cookies_file`。配置了它就不用填万方账号密码，
+  无头模式也能跑。cookie 过期后重新导出覆盖即可（程序会提示 Cookie 登录失效）。
+
 ## 功能对应关系（对照截图步骤）
 
 | 步骤 | 截图 | 程序实现 |
