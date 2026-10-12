@@ -5,7 +5,8 @@
   embase去重后数量 | 知网检索数量 | 知网去重后数量 | 万方检索数量 | 万方去重后数量 | 检索时间段
 - Sheet2 明细: 日期 | 数据库 | 化合物 | 完整文献名称 | 文章名 | 结果 | 人员 | 备注
 
-匹配方式: 文章名 RapidFuzz 模糊匹配, 范围限定在 同数据库(万方)+同化合物(成分)。
+匹配方式: 文章名 RapidFuzz 模糊匹配, 范围限定在 同化合物(成分), 不限数据库
+(同一文献可能同时被万方/知网/Pubmed 收录, 跨库重复也要认出来; Top-5 里带数据库来源)。
 判定: score >= hi → 重复; lo <= score < hi → 待确认(界面逐条 double confirm);
 score < lo → 新增。用户确认后的新增条目追加进 Sheet2, 并在 Sheet1 追加一行台账,
 另存为 histories/ 下的新日期文件(不覆盖旧文件, 增量更新)。
@@ -155,11 +156,11 @@ def build_citation(item: dict) -> str:
 # ---------------- 匹配 ----------------
 
 class MatchResult:
-    """一条新文献的匹配结果。"""
+    """一条新文献的匹配结果。top5: [(历史文章名, 分数, 历史日期, 历史数据库)]。"""
 
-    def __init__(self, item: dict, top5: list[tuple[str, float, str]]):
+    def __init__(self, item: dict, top5: list[tuple[str, float, str, str]]):
         self.item = item
-        self.top5 = top5  # [(历史文章名, 分数, 历史日期)]
+        self.top5 = top5
         self.best = top5[0][1] if top5 else 0.0
         self.verdict = ""      # 重复 / 待确认 / 新增
         self.hint = ""         # 待确认时的倾向提示: 倾向重复 / 倾向新增
@@ -171,7 +172,9 @@ class MatchResult:
 
     @staticmethod
     def from_dict(d: dict) -> "MatchResult":
-        mr = MatchResult(d["item"], [tuple(t) for t in d["top5"]])
+        # 兼容旧缓存(3 元组无数据库列)
+        top5 = [tuple(t) if len(t) >= 4 else (t[0], t[1], t[2], "") for t in d["top5"]]
+        mr = MatchResult(d["item"], top5)
         mr.verdict = d.get("verdict", "")
         mr.manual = bool(d.get("manual", False))
         mr.hint = d.get("hint", "")
@@ -197,37 +200,50 @@ def classify(results: list[MatchResult], hi: float, lo: float) -> None:
 
 
 def match_items(new_items: list[dict], sheet2_rows: list[list], compound: str,
-                db: str = "万方", hi: float = 90.0, lo: float = 75.0,
+                hi: float = 90.0, lo: float = 75.0,
                 logger: logging.Logger | None = None) -> list[MatchResult]:
-    """把新检索条目与历史 Sheet2 比对。范围: 同数据库 + 同化合物。"""
-    db_n = db.lower()
+    """把新检索条目与历史 Sheet2 比对。
+
+    范围: 同化合物, 不限数据库(同一文献可能同时被万方/知网/Pubmed 收录,
+    跨库重复也要能认出来)。top5 里带历史条目的数据库来源。
+    """
+    # ---- 旧逻辑备份: 只匹配同数据库(万方) ----
+    # db_n = db.lower()
+    # for r in sheet2_rows[1:]:
+    #     if len(r) < 5: continue
+    #     if str(r[1] or "").strip().lower() != db_n: continue
+    #     if cp_n and norm_compound(...) != cp_n: continue
+    #     hist.append((norm_title, title, date))
+    # -----------------------------------------
     cp_n = norm_compound(compound)
-    hist = []  # (norm_title, raw_title, date_str)
+    hist = []  # (norm_title, raw_title, date_str, db_name)
+    db_counts: dict[str, int] = {}
     for r in sheet2_rows[1:]:
         if len(r) < 5:
-            continue
-        if str(r[1] or "").strip().lower() != db_n:
             continue
         if cp_n and norm_compound(str(r[2] or "")) != cp_n:
             continue
         title = str(r[4] or "").strip()
         if title:
-            hist.append((norm_text(title), title, str(r[0] or "")[:10]))
+            db_name = str(r[1] or "").strip()
+            hist.append((norm_text(title), title, str(r[0] or "")[:10], db_name))
+            db_counts[db_name] = db_counts.get(db_name, 0) + 1
     if logger:
-        logger.info("历史匹配范围: 数据库=%s 化合物=%s -> %d 条", db, compound, len(hist))
+        logger.info("历史匹配范围: 化合物=%s(不限数据库) -> %d 条 %s",
+                    compound, len(hist), db_counts)
     if not hist and logger:
-        logger.warning("历史文件里没有该 化合物+数据库 的记录, 全部按新增处理")
+        logger.warning("历史文件里没有该化合物的记录, 全部按待确认处理")
 
     choices = [h[0] for h in hist]
     results: list[MatchResult] = []
     for item in new_items:
         q = norm_text(item["题名"])
-        top5: list[tuple[str, float, str]] = []
+        top5: list[tuple[str, float, str, str]] = []
         if q and choices:
             for _choice, score, _i in process.extract(
                     q, choices, scorer=fuzz.ratio, limit=5):
                 h = hist[_i]
-                top5.append((h[1], round(float(score), 1), h[2]))
+                top5.append((h[1], round(float(score), 1), h[2], h[3]))
         mr = MatchResult(item, top5)
         results.append(mr)
     classify(results, hi, lo)

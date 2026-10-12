@@ -664,8 +664,8 @@ class DedupDialog(tk.Toplevel):
             return
         r = self._results[int(sel[0])]
         lines = [f"新: {r.item['题名']}", f"作者: {r.item.get('作者','')} | {r.item.get('刊名','')} {r.item.get('年','')}", ""]
-        for j, (t, s, d) in enumerate(r.top5, 1):
-            lines.append(f"{j}. [{s:.1f}分] ({d}) {t}")
+        for j, (t, s, d, db) in enumerate(r.top5, 1):
+            lines.append(f"{j}. [{s:.1f}分] ({d} {db}) {t}")
         if not r.top5:
             lines.append("(历史范围内无匹配)")
         self.top5_box.config(state="normal")
