@@ -155,6 +155,20 @@ build_exe.bat
 python build_exe.py
 ```
 
+也可以不经过脚本，直接跑 PyInstaller（先 `pip install -r requirements.txt pyinstaller`）：
+
+```
+python -m PyInstaller --noconfirm --clean --onefile --name auto_search --collect-all playwright main.py
+```
+
+或用仓库里现成的 spec 文件（内容与上面命令等价）：
+
+```
+pyinstaller --noconfirm --clean auto_search.spec
+```
+
+产物均为 `dist\auto_search.exe`（单文件）。
+
 PyInstaller 不支持跨平台打包：在 Linux/macOS 上只能产出对应平台的程序，产不出
 Windows exe。请在目标 Windows 机器（装好 Python 3.10+，勾选 Add to PATH）上运行
 `build_exe.bat`，生成的 `dist\auto_search.exe` 为单文件（含 Python 运行时和
