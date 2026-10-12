@@ -14,7 +14,24 @@ from .utils import get_logger
 
 
 def _safe_name(name: str) -> str:
+    """文件夹/文件名的安全化: 去路径分隔符, 方括号转中文括号。"""
+    name = name.replace("[", "（").replace("]", "）")
     return re.sub(r'[\\/:*?"<>|\s]+', "_", name).strip("_") or "task"
+
+
+def _task_outdir(cfg: AppConfig, task, task_name: str, attempt: int) -> Path:
+    """任务输出目录。
+
+    万方且有成分名时: output/YYYYMMDD/成分名/wanfang_HHMMSS（便于按日期+成分归档、
+    给去重模块挑选）；其他情况沿用 output/任务名_时间戳。
+    """
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    suffix = "" if attempt == 1 else f"_retry{attempt}"
+    if task.site == "wanfang" and task.compound:
+        day = time.strftime("%Y%m%d")
+        hm = time.strftime("%H%M%S")
+        return cfg.output_dir / day / _safe_name(task.compound) / f"wanfang_{hm}{suffix}"
+    return cfg.output_dir / f"{task_name}_{stamp}{suffix}"
 
 
 # 任务级重试: 这些错误多为网络/VPN 临时问题，值得整体重跑
@@ -56,8 +73,7 @@ async def _run_task(browser, cfg: AppConfig, task, logger) -> bool:
     max_attempts = 1 + cfg.task_retries
     for attempt in range(1, max_attempts + 1):
         stamp = time.strftime("%Y%m%d_%H%M%S")
-        suffix = f"_{stamp}" if attempt == 1 else f"_{stamp}_retry{attempt}"
-        outdir = cfg.output_dir / f"{task_name}{suffix}"
+        outdir = _task_outdir(cfg, task, task_name, attempt)
         outdir.mkdir(parents=True, exist_ok=True)
         tlog = get_logger(f"auto_search.{task_name}.{stamp}", outdir / "run.log")
         tlog.info("任务输出目录: %s (第 %d/%d 次尝试)", outdir, attempt, max_attempts)

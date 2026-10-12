@@ -71,6 +71,7 @@ def build_raw_config(base_raw: dict, v: dict) -> dict:
         name=t.get("name") or "embase_task",
         site=_DB_SITE.get(v["database"], t.get("site") or "chaoslib"),
         database=v["database"],
+        compound=v["compound"],
         query=v["query"],
         date_filter=df,
         per_page=v["per_page"],
@@ -264,6 +265,7 @@ class App:
         self.btn_run = ttk.Button(btn_frame, text="开始运行", command=self._start)
         self.btn_run.pack(side="left")
         ttk.Button(btn_frame, text="保存为默认配置", command=self._save_defaults).pack(side="left", padx=8)
+        ttk.Button(btn_frame, text="去重…", command=self._open_dedup).pack(side="left", padx=4)
         self.v_status = ttk.Label(btn_frame, text="就绪")
         self.v_status.pack(side="left", padx=12)
         btn_frame.grid(row=row, column=0, columnspan=2, sticky="w", pady=6); row += 1
@@ -300,6 +302,9 @@ class App:
         if f:
             self.v_wf_cookies.delete(0, "end")
             self.v_wf_cookies.insert(0, f)
+
+    def _open_dedup(self):
+        DedupDialog(self)
 
     def _db_key(self) -> str:
         """数据库下拉框当前显示名 -> 内部键(embase/pubmed/wanfang/cnki)。"""
@@ -339,6 +344,7 @@ class App:
             "wf_password": self.v_wf_pass.get().strip(),
             "wf_cookies_file": self.v_wf_cookies.get().strip(),
             "database": self._db_key(),
+            "compound": self.v_drug.get().strip(),
             "query": self.v_query.get("1.0", "end").strip(),
             "df_enabled": self.v_df_enabled.get(),
             "df_type": _DATE_TYPE_VALUES.get(self.v_df_type.get(), "records_added"),
@@ -439,3 +445,276 @@ def run_gui(config_path: Path) -> int:
     App(root, config_path)
     root.mainloop()
     return 0
+
+
+class DedupDialog(tk.Toplevel):
+    """去重窗口: 新检索结果 vs 历史检索文件。
+
+    流程: 选历史文件(默认 histories/ 下最新) + 新检索文件(默认 output/ 下最新导出)
+    + 化合物 -> 开始匹配(RapidFuzz, 结果缓存到 新文件同目录 dedup_match_cache.json)
+    -> 列表显示每条判定(重复/待确认/新增), 选中行看 top-5 匹配, 可手动改判
+    -> 调阈值后「重新分类」不重新计算 -> 「写入新历史文件」另存到 histories/。
+    """
+
+    def __init__(self, app: "App"):
+        super().__init__(app.root)
+        self.app = app
+        self.title("检索去重(万方)")
+        self.geometry("980x640")
+        self.results: list = []          # list[dedup.MatchResult]
+        self.hist_path: Path | None = None
+        self.sheet2_rows: list = []
+
+        from . import dedup  # 延迟导入, 避免主界面启动时就加载 rapidfuzz
+        self.dedup = dedup
+
+        base = app.config_path.parent
+        top = ttk.Frame(self, padding=8)
+        top.pack(fill="x")
+
+        # 历史检索文件
+        ttk.Label(top, text="历史检索文件").grid(row=0, column=0, sticky="w")
+        self.v_hist = ttk.Entry(top, width=70)
+        self.v_hist.grid(row=0, column=1, columnspan=4, sticky="ew", padx=4)
+        ttk.Button(top, text="浏览…", command=self._pick_hist).grid(row=0, column=5)
+        hist0 = dedup.find_latest_history(base / "histories")
+        if hist0:
+            self.v_hist.insert(0, str(hist0))
+
+        # 新检索文件
+        ttk.Label(top, text="新检索文件").grid(row=1, column=0, sticky="w")
+        self.v_new = ttk.Entry(top, width=70)
+        self.v_new.grid(row=1, column=1, columnspan=4, sticky="ew", padx=4)
+        ttk.Button(top, text="浏览…", command=self._pick_new).grid(row=1, column=5)
+        new0 = self._find_latest_export(base)
+        if new0:
+            self.v_new.insert(0, str(new0))
+
+        # 化合物 + 人员 + 阈值
+        ttk.Label(top, text="化合物(成分)").grid(row=2, column=0, sticky="w")
+        self.v_compound = ttk.Combobox(top, values=list(DRUG_PRESETS), state="readonly", width=28)
+        self.v_compound.grid(row=2, column=1, sticky="w", padx=4)
+        if app.v_drug.get().strip():
+            self.v_compound.set(app.v_drug.get().strip())
+        ttk.Label(top, text="人员").grid(row=2, column=2, sticky="e")
+        self.v_operator = ttk.Entry(top, width=10)
+        self.v_operator.grid(row=2, column=3, sticky="w")
+        ttk.Label(top, text="阈值 重复≥").grid(row=2, column=4, sticky="e")
+        th = ttk.Frame(top)
+        self.v_hi = ttk.Entry(th, width=5)
+        self.v_hi.insert(0, "90")
+        self.v_hi.pack(side="left")
+        ttk.Label(th, text=" 待确认≥").pack(side="left")
+        self.v_lo = ttk.Entry(th, width=5)
+        self.v_lo.insert(0, "75")
+        self.v_lo.pack(side="left")
+        th.grid(row=2, column=5, sticky="w", padx=4)
+
+        act = ttk.Frame(self, padding=(8, 0))
+        act.pack(fill="x")
+        self.btn_match = ttk.Button(act, text="开始匹配", command=self._start_match)
+        self.btn_match.pack(side="left")
+        ttk.Button(act, text="重新分类(不重算)", command=self._reclassify).pack(side="left", padx=8)
+        self.btn_write = ttk.Button(act, text="写入新历史文件", command=self._write, state="disabled")
+        self.btn_write.pack(side="left", padx=8)
+        self.v_summary = ttk.Label(act, text="")
+        self.v_summary.pack(side="left", padx=12)
+
+        # 结果列表 + top5 详情
+        body = ttk.Frame(self, padding=8)
+        body.pack(fill="both", expand=True)
+        cols = ("idx", "title", "score", "verdict")
+        self.tree = ttk.Treeview(body, columns=cols, show="headings", height=14)
+        self.tree.heading("idx", text="#")
+        self.tree.heading("title", text="新检索文章名")
+        self.tree.heading("score", text="最佳分")
+        self.tree.heading("verdict", text="判定")
+        self.tree.column("idx", width=50)
+        self.tree.column("title", width=520)
+        self.tree.column("score", width=70)
+        self.tree.column("verdict", width=80)
+        self.tree.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(body, orient="vertical", command=self.tree.yview)
+        sb.pack(side="left", fill="y")
+        self.tree.configure(yscrollcommand=sb.set)
+        self.tree.bind("<<TreeviewSelect>>", self._show_top5)
+        self.tree.tag_configure("重复", foreground="#999")
+        self.tree.tag_configure("新增", foreground="#0a0")
+        self.tree.tag_configure("待确认", foreground="#e60")
+
+        right = ttk.Frame(body)
+        right.pack(side="left", fill="both", padx=(8, 0))
+        ttk.Label(right, text="Top-5 历史匹配(选中行)").pack(anchor="w")
+        self.top5_box = tk.Text(right, width=46, height=12, wrap="word", state="disabled")
+        self.top5_box.pack(fill="both", expand=True)
+        btns = ttk.Frame(right)
+        btns.pack(fill="x", pady=4)
+        ttk.Button(btns, text="判为重复", command=lambda: self._set_verdict("重复")).pack(side="left")
+        ttk.Button(btns, text="判为新增", command=lambda: self._set_verdict("新增")).pack(side="left", padx=4)
+        ttk.Button(btns, text="判为待确认", command=lambda: self._set_verdict("待确认")).pack(side="left")
+
+    # ---------------- 文件选择 ----------------
+
+    def _pick_hist(self):
+        f = filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx")])
+        if f:
+            self.v_hist.delete(0, "end")
+            self.v_hist.insert(0, f)
+
+    def _pick_new(self):
+        f = filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx")])
+        if f:
+            self.v_new.delete(0, "end")
+            self.v_new.insert(0, f)
+
+    @staticmethod
+    def _find_latest_export(base: Path) -> Path | None:
+        out = base / "output"
+        if not out.exists():
+            return None
+        files = list(out.rglob("export_all*.xlsx"))
+        if not files:
+            return None
+        return max(files, key=lambda p: p.stat().st_mtime)
+
+    # ---------------- 匹配 ----------------
+
+    def _log(self, text: str):
+        self.app.log_q.put(text)
+
+    def _start_match(self):
+        hist = Path(self.v_hist.get().strip())
+        new = Path(self.v_new.get().strip())
+        compound = self.v_compound.get().strip()
+        if not hist.exists() or not new.exists():
+            messagebox.showerror("文件缺失", "请选好历史检索文件和新检索文件", parent=self)
+            return
+        if not compound:
+            messagebox.showerror("缺化合物", "请选择化合物(成分)", parent=self)
+            return
+        self.btn_match.state(["disabled"])
+        self._log(f"===== 去重匹配: {new.name} vs {hist.name} (化合物: {compound}) =====")
+        self._done = False
+        self._results = []
+        self._hist_path = hist
+        log = _DialogLogger(self._log)
+
+        def work():
+            try:
+                cache = new.parent / "dedup_match_cache.json"
+                results = self.dedup.load_match_cache(cache, new, hist, compound)
+                if results is not None:
+                    self._log(f"使用缓存的匹配结果({len(results)} 条, 未重复计算)")
+                else:
+                    _s1, s2 = self.dedup.load_history(hist)
+                    items = self.dedup.load_wanfang_export(new)
+                    self._log(f"新检索 {len(items)} 条, 历史 Sheet2 {len(s2) - 1} 条, 开始匹配…")
+                    results = self.dedup.match_items(
+                        items, s2, compound,
+                        hi=float(self.v_hi.get() or 90), lo=float(self.v_lo.get() or 75),
+                        logger=log)
+                    self.dedup.save_match_cache(cache, new, hist, compound, results)
+                    self._log(f"匹配完成, 结果已缓存到 {cache}")
+                self._results = results
+            except Exception as e:  # noqa: BLE001
+                self._error = str(e)
+            finally:
+                self._done = True
+
+        self._error = None
+        threading.Thread(target=work, daemon=True).start()
+        self.after(200, self._poll_match)
+
+    def _poll_match(self):
+        if not self._done:
+            self.after(200, self._poll_match)
+            return
+        self.btn_match.state(["!disabled"])
+        if self._error:
+            self._log(f"匹配失败: {self._error}")
+            messagebox.showerror("匹配失败", self._error, parent=self)
+            return
+        self._fill_tree()
+        self.btn_write.state(["!disabled"])
+        self._log("匹配结果显示在下方列表；选中任意行看 Top-5 匹配，可改判或调阈值后「重新分类」")
+
+    # 线程安全日志走主窗口; 匹配完成信号轮询
+    def _fill_tree(self):
+        for i in self.tree.get_children():
+            self.tree.delete(i)
+        for i, r in enumerate(self._results, 1):
+            self.tree.insert("", "end", iid=str(i - 1), values=(
+                i, r.item["题名"][:60], f"{r.best:.1f}", r.verdict), tags=(r.verdict,))
+        self._update_summary()
+
+    def _update_summary(self):
+        from collections import Counter
+        c = Counter(r.verdict for r in self._results)
+        self.v_summary.config(
+            text=f"共 {len(self._results)} 条 | 重复 {c.get('重复', 0)} | "
+                 f"待确认 {c.get('待确认', 0)} | 新增 {c.get('新增', 0)}")
+
+    def _show_top5(self, _evt=None):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        r = self._results[int(sel[0])]
+        lines = [f"新: {r.item['题名']}", f"作者: {r.item.get('作者','')} | {r.item.get('刊名','')} {r.item.get('年','')}", ""]
+        for j, (t, s, d) in enumerate(r.top5, 1):
+            lines.append(f"{j}. [{s:.1f}分] ({d}) {t}")
+        if not r.top5:
+            lines.append("(历史范围内无匹配)")
+        self.top5_box.config(state="normal")
+        self.top5_box.delete("1.0", "end")
+        self.top5_box.insert("1.0", "\n".join(lines))
+        self.top5_box.config(state="disabled")
+
+    def _set_verdict(self, v: str):
+        for iid in self.tree.selection():
+            r = self._results[int(iid)]
+            r.verdict = v
+            r.manual = True
+            self.tree.item(iid, values=(int(iid) + 1, r.item["题名"][:60], f"{r.best:.1f}", v),
+                           tags=(v,))
+        self._update_summary()
+
+    def _reclassify(self):
+        if not self._results:
+            return
+        hi = float(self.v_hi.get() or 90)
+        lo = float(self.v_lo.get() or 75)
+        self.dedup.classify(self._results, hi, lo)
+        self._fill_tree()
+        self._log(f"已按阈值 重复≥{hi} / 待确认≥{lo} 重新分类(手动判定的行保持不变, 未重新计算匹配)")
+
+    # ---------------- 写入 ----------------
+
+    def _write(self):
+        if not self._results or self._hist_path is None:
+            return
+        hist_dir = self.app.config_path.parent / "histories"
+        operator = self.v_operator.get().strip() or "张瀛月"
+        try:
+            out = self.dedup.write_new_history(
+                self._hist_path, hist_dir, self.v_compound.get().strip(),
+                self._results, total_new=len(self._results),
+                operator=operator, logger=_DialogLogger(self._log))
+            messagebox.showinfo("已写入", f"新历史检索文件:\n{out}", parent=self)
+        except Exception as e:  # noqa: BLE001
+            messagebox.showerror("写入失败", str(e), parent=self)
+
+
+class _DialogLogger:
+    """把 dedup 模块的 logger 调用转到主窗口日志。"""
+
+    def __init__(self, log_fn):
+        self._fn = log_fn
+
+    def info(self, msg, *a):
+        self._fn(str(msg) % a if a else str(msg))
+
+    def warning(self, msg, *a):
+        self._fn("WARNING: " + (str(msg) % a if a else str(msg)))
+
+    def error(self, msg, *a):
+        self._fn("ERROR: " + (str(msg) % a if a else str(msg)))

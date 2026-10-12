@@ -1,3 +1,4 @@
 playwright>=1.40
 PyYAML>=6.0
-openpyxl>=3.1  # 万方导出 XLSX 的合并
+openpyxl>=3.1  # 万方导出 XLSX 的合并 / 去重读写历史文件
+rapidfuzz>=3.0  # 去重: 文章名模糊匹配打分

@@ -184,6 +184,7 @@ class TaskConfig:
     site: str = "chaoslib"
     database: str = "embase"
     category: str = "医学数据库"  # chaoslib 左侧分类名
+    compound: str = ""  # 成分名(界面「药物」选择; 用于万方输出目录与去重)
     query: str = ""
     date_filter: DateFilterConfig = field(default_factory=DateFilterConfig)
     per_page: int = 200
@@ -258,6 +259,7 @@ def _parse_task(raw, idx: int) -> TaskConfig:
         site=str(raw.get("site", "chaoslib")).strip(),
         database=str(raw.get("database", "embase")).strip(),
         category=str(raw.get("category", "医学数据库")).strip(),
+        compound=str(raw.get("compound", "")).strip(),
         query=str(raw.get("query", "")).strip(),
         date_filter=df,
         per_page=int(raw.get("per_page", 200)),
