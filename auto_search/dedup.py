@@ -162,31 +162,38 @@ class MatchResult:
         self.top5 = top5  # [(历史文章名, 分数, 历史日期)]
         self.best = top5[0][1] if top5 else 0.0
         self.verdict = ""      # 重复 / 待确认 / 新增
+        self.hint = ""         # 待确认时的倾向提示: 倾向重复 / 倾向新增
         self.manual = False    # 用户在界面手动判定过则为 True, 重新分类时不覆盖
 
     def to_dict(self) -> dict:
         return {"item": self.item, "top5": self.top5, "best": self.best,
-                "verdict": self.verdict, "manual": self.manual}
+                "verdict": self.verdict, "manual": self.manual, "hint": self.hint}
 
     @staticmethod
     def from_dict(d: dict) -> "MatchResult":
         mr = MatchResult(d["item"], [tuple(t) for t in d["top5"]])
         mr.verdict = d.get("verdict", "")
         mr.manual = bool(d.get("manual", False))
+        mr.hint = d.get("hint", "")
         return mr
 
 
 def classify(results: list[MatchResult], hi: float, lo: float) -> None:
-    """按阈值给未手动确认的条目重新定级(不重新计算匹配)。"""
+    """按阈值定级(不重新计算匹配, 不覆盖用户手动判定)。
+
+    规则: score >= hi → 重复(不写入); 其余 → 待确认(默认不写入)。
+    待确认里再按 lo 分档给提示: lo~hi 倾向重复, < lo 倾向新增。
+    只有用户确认成「新增」的条目才会写入新历史文件。
+    """
     for r in results:
         if r.manual:
             continue
         if r.best >= hi:
             r.verdict = "重复"
-        elif r.best >= lo:
-            r.verdict = "待确认"
+            r.hint = ""
         else:
-            r.verdict = "新增"
+            r.verdict = "待确认"
+            r.hint = "倾向重复" if r.best >= lo else "倾向新增"
 
 
 def match_items(new_items: list[dict], sheet2_rows: list[list], compound: str,

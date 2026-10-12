@@ -452,8 +452,9 @@ class DedupDialog(tk.Toplevel):
 
     流程: 选历史文件(默认 histories/ 下最新) + 新检索文件(默认 output/ 下最新导出)
     + 化合物 -> 开始匹配(RapidFuzz, 结果缓存到 新文件同目录 dedup_match_cache.json)
-    -> 列表显示每条判定(重复/待确认/新增), 选中行看 top-5 匹配, 可手动改判
-    -> 调阈值后「重新分类」不重新计算 -> 「写入新历史文件」另存到 histories/。
+    -> 列表显示每条判定: 高分=重复(不写入), 其余=待确认(默认不写入, 需人工确认成新增)
+    -> 选中行看 top-5, 逐条或多选批量改判 -> 调阈值后「重新分类」不重算
+    -> 「写入新历史文件」只写入判为「新增」的条目, 另存到 histories/。
     """
 
     def __init__(self, app: "App"):
@@ -504,7 +505,7 @@ class DedupDialog(tk.Toplevel):
         self.v_hi = ttk.Entry(th, width=5)
         self.v_hi.insert(0, "90")
         self.v_hi.pack(side="left")
-        ttk.Label(th, text=" 待确认≥").pack(side="left")
+        ttk.Label(th, text=" 倾向重复≥").pack(side="left")
         self.v_lo = ttk.Entry(th, width=5)
         self.v_lo.insert(0, "75")
         self.v_lo.pack(side="left")
@@ -552,6 +553,8 @@ class DedupDialog(tk.Toplevel):
         ttk.Button(btns, text="判为重复", command=lambda: self._set_verdict("重复")).pack(side="left")
         ttk.Button(btns, text="判为新增", command=lambda: self._set_verdict("新增")).pack(side="left", padx=4)
         ttk.Button(btns, text="判为待确认", command=lambda: self._set_verdict("待确认")).pack(side="left")
+        ttk.Label(right, text="列表支持 Ctrl/Shift 多选后批量改判；\n只有判为「新增」的条目才会写入新历史文件。",
+                  foreground="#888").pack(anchor="w", pady=(6, 0))
 
     # ---------------- 文件选择 ----------------
 
@@ -643,8 +646,9 @@ class DedupDialog(tk.Toplevel):
         for i in self.tree.get_children():
             self.tree.delete(i)
         for i, r in enumerate(self._results, 1):
+            verdict = r.verdict + (f"·{r.hint}" if r.verdict == "待确认" and r.hint else "")
             self.tree.insert("", "end", iid=str(i - 1), values=(
-                i, r.item["题名"][:60], f"{r.best:.1f}", r.verdict), tags=(r.verdict,))
+                i, r.item["题名"][:60], f"{r.best:.1f}", verdict), tags=(r.verdict,))
         self._update_summary()
 
     def _update_summary(self):
@@ -691,6 +695,17 @@ class DedupDialog(tk.Toplevel):
 
     def _write(self):
         if not self._results or self._hist_path is None:
+            return
+        from collections import Counter
+        c = Counter(r.verdict for r in self._results)
+        if c.get("待确认"):
+            if not messagebox.askyesno(
+                    "有待确认条目",
+                    f"还有 {c['待确认']} 条「待确认」没有判定，它们不会写入新历史文件。\n"
+                    f"确认写入 {c.get('新增', 0)} 条「新增」吗？", parent=self):
+                return
+        if not c.get("新增"):
+            messagebox.showinfo("无可写入", "没有判定为「新增」的条目，未生成新文件。", parent=self)
             return
         hist_dir = self.app.config_path.parent / "histories"
         operator = self.v_operator.get().strip() or "张瀛月"
