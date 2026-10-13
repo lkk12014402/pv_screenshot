@@ -115,16 +115,25 @@ class CnkiSite(SitePlugin):
         await page.goto(base_url, wait_until="domcontentloaded")
         await wait_ready(page, 8000)
 
-        # 打开“个人登录”面板(有的页面默认已展开)
-        try:
-            entry = await first_visible(page, S.LOGIN_ENTRY, timeout=8000)
-            await entry.click()
-            await asyncio.sleep(1)
-        except LookupError:
-            pass  # 面板可能已展开
+        # 打开“个人登录”面板(面板可能默认已展开; 此时再点入口会把它关掉!)
+        if await self._pwd_visible(page, timeout_s=5):
+            logger.info("登录面板已展开，直接填账号密码")
+        else:
+            logger.info("点击「个人登录」展开登录面板")
+            try:
+                entry = await first_visible(page, S.LOGIN_ENTRY, timeout=15000)
+                await entry.click()
+            except LookupError:
+                await dump_debug(page, outdir, "login_entry_missing", logger)
+                raise RuntimeError("未找到「个人登录」入口(页面结构可能已变，见 _debug 快照)")
+            if not await self._pwd_visible(page, timeout_s=15):
+                await dump_debug(page, outdir, "login_panel_missing", logger)
+                raise RuntimeError("点击「个人登录」后密码框仍未出现(见 _debug 快照)")
 
+        logger.info("填入账号")
         user = await first_visible(page, S.LOGIN_USER, timeout=20000)
         await fill_input_smart(user, account.username)
+        logger.info("填入密码")
         pwd = await first_visible(page, S.LOGIN_PWD, timeout=10000)
         await fill_input_smart(pwd, account.password)
 
@@ -150,6 +159,19 @@ class CnkiSite(SitePlugin):
             await dump_debug(page, outdir, "login_failed", logger)
             raise RuntimeError(
                 "登录可能失败。如出现滑块/验证码，请改用有头模式(--headed 或界面取消无头)人工通过后再运行。")
+
+    @staticmethod
+    async def _pwd_visible(page: Page, timeout_s: float = 5) -> bool:
+        """登录面板的密码框是否已可见(判断面板是否已展开)。"""
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            try:
+                if await page.locator('input[type="password"]:visible').count() > 0:
+                    return True
+            except Exception:  # noqa: BLE001
+                pass
+            await asyncio.sleep(0.5)
+        return False
 
     async def open_database(self, page: Page, db_name: str, logger: logging.Logger,
                             category: str = "") -> Page:
