@@ -331,9 +331,11 @@ class App:
     def _update_db_hint(self):
         key = self._db_key()
         self.v_db_hint.config(text=_DB_FLOW_HINTS.get(key, ""))
-        # 「逐页导出CSV」复选框文案随数据库切换(万方是批量引用导出XLS)
-        self.cb_csv.config(
-            text="分批导出 XLS（批量引用）" if key == "wanfang" else "逐页导出 CSV")
+        # 导出复选框文案随数据库切换(万方=XLS批量引用, 知网=GB/T引文TXT)
+        self.cb_csv.config(text={
+            "wanfang": "分批导出 XLS（批量引用）",
+            "cnki": "逐页导出 TXT（GB/T 7714 引文）",
+        }.get(key, "逐页导出 CSV"))
         self._apply_db_ui_state(key)
 
     # 各数据库的每页条数选项与默认值(万方/知网只支持部分)
@@ -359,8 +361,11 @@ class App:
             self.v_per_page.set(default)
         unsupported = self._DB_UNSUPPORTED.get(key, set())
         df_off = "date_filter" in unsupported
-        for w in (self.cb_df, self.v_df_type, self.v_df_start, self.v_df_end):
+        for w in (self.cb_df, self.v_df_start, self.v_df_end):
             w.state(["disabled"] if df_off else ["!disabled"])
+        # 日期类型下拉: 万方整个日期行置灰; 知网日期类型无意义(起止都填 yyyy-mm-dd)也禁用
+        type_off = df_off or key == "cnki"
+        self.v_df_type.state(["disabled"] if type_off else ["!disabled"])
         fields_off = "csv_fields" in unsupported
         self.v_fields.config(state="disabled" if fields_off else "normal")
         self.v_fields_by.state(["disabled"] if fields_off else ["!disabled"])
