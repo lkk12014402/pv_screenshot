@@ -507,7 +507,7 @@ class DedupDialog(tk.Toplevel):
     def __init__(self, app: "App"):
         super().__init__(app.root)
         self.app = app
-        self.title("检索去重(万方)")
+        self.title("检索去重(万方/知网)")
         self.geometry("980x640")
         self.results: list = []          # list[dedup.MatchResult]
         self.hist_path: Path | None = None
@@ -614,7 +614,8 @@ class DedupDialog(tk.Toplevel):
             self.v_hist.insert(0, f)
 
     def _pick_new(self):
-        f = filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx")])
+        f = filedialog.askopenfilename(
+            filetypes=[("检索导出", "*.xlsx *.txt"), ("Excel", "*.xlsx"), ("知网引文TXT", "*.txt")])
         if f:
             self.v_new.delete(0, "end")
             self.v_new.insert(0, f)
@@ -624,7 +625,7 @@ class DedupDialog(tk.Toplevel):
         out = base / "output"
         if not out.exists():
             return None
-        files = list(out.rglob("export_all*.xlsx"))
+        files = list(out.rglob("export_all*.xlsx")) + list(out.rglob("export_all*.txt"))
         if not files:
             return None
         return max(files, key=lambda p: p.stat().st_mtime)
@@ -645,7 +646,8 @@ class DedupDialog(tk.Toplevel):
             messagebox.showerror("缺化合物", "请选择化合物(成分)", parent=self)
             return
         self.btn_match.state(["disabled"])
-        self._log(f"===== 去重匹配: {new.name} vs {hist.name} (化合物: {compound}) =====")
+        self._db_name = self.dedup.infer_db_from_file(new)
+        self._log(f"===== 去重匹配({self._db_name}): {new.name} vs {hist.name} (化合物: {compound}) =====")
         self._done = False
         self._results = []
         self._hist_path = hist
@@ -659,8 +661,8 @@ class DedupDialog(tk.Toplevel):
                     self._log(f"使用缓存的匹配结果({len(results)} 条, 未重复计算)")
                 else:
                     _s1, s2 = self.dedup.load_history(hist)
-                    items = self.dedup.load_wanfang_export(new)
-                    self._log(f"新检索 {len(items)} 条, 历史 Sheet2 {len(s2) - 1} 条, 开始匹配…")
+                    items = self.dedup.load_new_export(new)
+                    self._log(f"新检索 {len(items)} 条({self._db_name}), 历史 Sheet2 {len(s2) - 1} 条, 开始匹配…")
                     results = self.dedup.match_items(
                         items, s2, compound,
                         hi=float(self.v_hi.get() or 90), lo=float(self.v_lo.get() or 75),
@@ -783,7 +785,8 @@ class DedupDialog(tk.Toplevel):
             out = self.dedup.write_new_history(
                 self._hist_path, hist_dir, self.v_compound.get().strip(),
                 self._results, total_new=len(self._results),
-                operator=operator, logger=_DialogLogger(self._log))
+                operator=operator, db_name=self._db_name,
+                logger=_DialogLogger(self._log))
             messagebox.showinfo("已写入", f"新历史检索文件:\n{out}", parent=self)
         except Exception as e:  # noqa: BLE001
             messagebox.showerror("写入失败", str(e), parent=self)

@@ -25,10 +25,14 @@ from rapidfuzz import fuzz, process
 # ---------------- 文本归一化 ----------------
 
 _TRANS = str.maketrans({
-    "‑": "-",  # U+2011 不断字连字符 -> 普通连字符(历史文件里 Lu‑177 混用)
-    "–": "-", "—": "-",
-    "　": " ",
-    " ": " ",
+    "\u2010": "-",  # U+2010 连字符(NFKC 会把 U+2011 兼容分解为它, 两个都要收)
+    "\u2011": "-",  # U+2011 不断字连字符(历史文件里 Lu‑177 混用)
+    "\u2012": "-",  # U+2012
+    "\u2013": "-",  # U+2013
+    "\u2014": "-",  # U+2014
+    "\u2212": "-",  # U+2212 减号
+    "\u3000": " ",  # 全角空格
+    "\u00a0": " ",  # NBSP
 })
 _PUNCT_RE = re.compile(r"[\s\W_]+", re.UNICODE)
 
@@ -41,10 +45,10 @@ def norm_text(s: str) -> str:
 
 
 def norm_compound(s: str) -> str:
-    """化合物名归一化(比文章名宽松些, 只统一连字符和空白)。"""
+    """化合物名归一化: 统一连字符后, 连字符与空白一并去除( Lu‑177 == Lu 177 )。"""
     s = unicodedata.normalize("NFKC", s or "")
-    s = s.translate(_TRANS)
-    return re.sub(r"\s+", " ", s).strip().lower()
+    s = s.translate(_TRANS).lower()
+    return re.sub(r"[\s\-]+", "", s)
 
 
 # ---------------- 历史文件读取 ----------------
@@ -127,7 +131,13 @@ def load_wanfang_export(path: Path) -> list[dict]:
 
 
 def build_citation(item: dict) -> str:
-    """按历史文件的 GB/T 7714 风格拼「完整文献名称」(缺省字段自动跳过)。"""
+    """按历史文件的 GB/T 7714 风格拼「完整文献名称」。
+
+    知网条目直接用原始引文行(item['_raw']，本身就是 GB/T 7714 格式);
+    万方条目按字段拼(缺省字段自动跳过)。
+    """
+    if item.get("_raw"):
+        return item["_raw"]
     parts = []
     if item.get("作者"):
         parts.append(item["作者"].rstrip(",.，。") + ".")
@@ -151,6 +161,75 @@ def build_citation(item: dict) -> str:
     if item.get("DOI"):
         parts.append(f"DOI:{item['DOI']}")
     return " ".join(p for p in parts if p)
+
+
+# ---------------- 知网导出文件读取 ----------------
+
+_CNKI_LINE_RE = re.compile(
+    r"^(?:\[(?P<idx>\d+)\])?\s*(?P<authors>.*?)\.(?P<title>.*?)"
+    r"\[(?P<dtype>[JDCMNRSP])\]\.?(?P<rest>.*)$")
+_DOI_RE = re.compile(r"DOI:(?P<doi>\S+?)\.?\s*$", re.I)
+
+
+def load_cnki_export(path: Path) -> list[dict]:
+    """读知网导出的 GB/T 7714 引文 txt(每条一行: [N]作者.题名[J].刊名,年,卷(期):页码.DOI:x.)
+
+    返回与万方导出相同的字段结构; 原文行存 item['_raw'](本身就是完整引文),
+    item['_db'] = '知网'。
+    """
+    raw = path.read_bytes()
+    for enc in ("utf-8", "gb18030"):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        text = raw.decode("utf-8", errors="replace")
+    items = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("<<"):
+            continue
+        m = _CNKI_LINE_RE.match(line)
+        if not m:
+            continue
+        rest = m.group("rest")
+        doi_m = _DOI_RE.search(rest)
+        doi = doi_m.group("doi") if doi_m else ""
+        # 来源与年份: [J] 后是 刊名,年,卷(期):页码; [D] 后是 学校,年
+        seg = rest[:doi_m.start()] if doi_m else rest
+        seg = seg.rstrip(".")
+        parts = [p.strip() for p in seg.split(",") if p.strip()]
+        source = parts[0] if parts else ""
+        year = ""
+        for p in parts[1:]:
+            ym = re.match(r"^(\d{4})", p)
+            if ym:
+                year = ym.group(1)
+                break
+        title = m.group("title").strip()
+        if not title:
+            continue
+        items.append({
+            "作者": m.group("authors").strip(), "题名": title,
+            "刊名": source if m.group("dtype") == "J" else "",
+            "年": year, "卷": "", "期": "", "页码": "", "DOI": doi,
+            "_raw": line, "_db": "知网",
+        })
+    return items
+
+
+def load_new_export(path: Path) -> list[dict]:
+    """按后缀分发: .txt -> 知网引文; .xlsx -> 万方导出。"""
+    if path.suffix.lower() == ".txt":
+        return load_cnki_export(path)
+    return load_wanfang_export(path)
+
+
+def infer_db_from_file(path: Path, items: list[dict] | None = None) -> str:
+    """由文件后缀推断新检索的数据库名(.txt=知网, .xlsx=万方)。"""
+    return "知网" if path.suffix.lower() == ".txt" else "万方"
 
 
 # ---------------- 匹配 ----------------
@@ -284,9 +363,10 @@ def load_match_cache(cache_path: Path, new_path: Path, hist_path: Path,
 def write_new_history(src_path: Path, hist_dir: Path, compound: str,
                       results: list[MatchResult], total_new: int,
                       operator: str, logger: logging.Logger,
-                      result_label: str = "新增") -> Path:
+                      result_label: str = "新增", db_name: str = "万方") -> Path:
     """把判定为「新增」的条目追加进历史文件, 另存新日期文件(不覆盖原文件)。
 
+    db_name 决定 Sheet2 的数据库列值与 Sheet1 台账行落入哪个库的列。
     返回新文件路径。
     """
     today = datetime.now()
@@ -294,18 +374,23 @@ def write_new_history(src_path: Path, hist_dir: Path, compound: str,
     dup = sum(1 for r in results if r.verdict == "重复")
     pending = sum(1 for r in results if r.verdict == "待确认")
 
+    # Sheet1 列: 日期|产品|pubmed检|pubmed重|embase检|embase重|知网检|知网重|万方检|万方重|检索时间段
+    _DB_COLS = {"pubmed": (2, 3), "embase": (4, 5), "知网": (6, 7), "万方": (8, 9)}
+    sheet1_row = [today, compound, "0", "0", "0", "0", "0", "0", "0", "0",
+                  f"{db_name}: 截至 {today.strftime('%Y%m%d')}"]
+    cols = _DB_COLS.get(db_name.lower(), _DB_COLS.get(db_name))
+    if cols:
+        sheet1_row[cols[0]] = str(total_new)
+        sheet1_row[cols[1]] = str(len(added))
+
     wb = load_workbook(src_path)  # 保留原格式
     ws2 = wb["Sheet2"]
     for r in added:
         citation = build_citation(r.item)
-        ws2.append([today, "万方", compound, citation, r.item["题名"],
+        ws2.append([today, db_name, compound, citation, r.item["题名"],
                     result_label, operator, ""])
     ws1 = wb["Sheet1"]
-    # 列: 日期|产品|pubmed检|pubmed重|embase检|embase重|知网检|知网重|万方检|万方重|检索时间段
-    ws1.append([today, compound,
-                "0", "0", "0", "0", "0", "0",
-                str(total_new), str(len(added)),
-                f"万方: 截至 {today.strftime('%Y%m%d')}"])
+    ws1.append(sheet1_row)
     hist_dir.mkdir(parents=True, exist_ok=True)
     out = hist_dir / f"base-data-{today.strftime('%Y%m%d')}.xlsx"
     if out.resolve() == src_path.resolve():
@@ -313,6 +398,6 @@ def write_new_history(src_path: Path, hist_dir: Path, compound: str,
     wb.save(out)
     wb.close()
     logger.info("新历史检索文件: %s", out)
-    logger.info("本次: 新检索 %d 条, 判定重复 %d, 待确认 %d, 新增写入 %d 条",
-                total_new, dup, pending, len(added))
+    logger.info("本次(%s): 新检索 %d 条, 判定重复 %d, 待确认 %d, 新增写入 %d 条",
+                db_name, total_new, dup, pending, len(added))
     return out
