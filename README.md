@@ -18,7 +18,7 @@ Windows 单文件 exe。
 | cnki | cnki | 知网直连（accounts.cnki 账号），专业检索 + 逐页 PDF + 逐页导出 GB/T 7714-2025 引文 TXT |
 
 知网流程（对应手工步骤）：登录知网（c61.oversea.cnki.net，内网打不开可在任务的
-`base_url` 换镜像 `https://oversea.cnki.net/`）→ 高级检索 → 专业检索 → 发表时间
+`base_url` 换镜像 `https://chn.oversea.cnki.net/`）→ 高级检索 → 专业检索 → 发表时间
 起止 → 检索 → 每页 50 条 → 逐页「全选 → 打印 PDF → 导出与分析 → 导出文献 →
 GB/T 7714-2025 → 导出 txt」→ 合并 `txt/export_all.txt`。结果为空也会打印结果页
 PDF 留证、跳过导出。知网登录若弹滑块验证码，请取消勾选「无头运行」手动拖一次。

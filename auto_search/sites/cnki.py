@@ -90,8 +90,12 @@ class S:  # noqa: D101 - 选择器集中处
     # “显示 20▾”下拉(自定义) -> 选项 10/20/50
     PAGE_SIZE_WRAP_TEXT = re.compile(r"显示")
     # 导出与分析 -> 导出文献 -> GB/T 7714-2025 格式引文
-    EXPORT_MENU = ['div:has-text("导出与分析")', 'button:has-text("导出与分析")', 'text=导出与分析']
-    EXPORT_LIT = ['text=导出文献']
+    # 真实结构: ul.dropdown-analysis-btns > li > a(导出与分析); div:has-text 会误命中祖先容器
+    EXPORT_MENU = ['ul.dropdown-analysis-btns a:has-text("导出与分析")',
+                   'a:has-text("导出与分析")',
+                   'li:has-text("导出与分析")',
+                   'text=导出与分析']
+    EXPORT_LIT = ['a:has-text("导出文献")', 'text=导出文献']
     GBT_LINK = ['text=GB/T 7714-2025 格式引文', 'a:has-text("GB/T 7714-2025")']
     # 文献管理中心(dm8/manage/export.html)的导出按钮
     EXPORT_BTN = [
@@ -175,22 +179,32 @@ class CnkiSite(SitePlugin):
 
     async def open_database(self, page: Page, db_name: str, logger: logging.Logger,
                             category: str = "") -> Page:
-        """点击首页“高级检索”，跳到 kns.cnki.net/kns8s/AdvSearch(可能新标签页)。"""
+        """点击首页“高级检索”，跳到高级检索页(可能新标签页)。
+
+        目标地址按主机不同: 官网 kns.cnki.net/kns8s/AdvSearch; 镜像 oversea.cnki.net/kns8s/advsearch。
+        统一按 url 里含 kns8s/advsearch(不区分大小写)判断。
+        """
         adv = await first_visible(page, S.ADV_SEARCH, timeout=20000)
         await adv.click(no_wait_after=True)
-        # 等新标签页或本页跳到 kns.cnki.net
         deadline = time.monotonic() + 30
         db_page = None
+
+        def _is_adv(url: str) -> bool:
+            u = url.lower()
+            return "kns8s" in u and "advsearch" in u
+
         while time.monotonic() < deadline:
             for p in page.context.pages:
-                if not p.is_closed() and "kns.cnki.net" in p.url:
+                if not p.is_closed() and _is_adv(p.url):
                     db_page = p
                     break
+            if not db_page and not page.is_closed() and _is_adv(page.url):
+                db_page = page
             if db_page:
                 break
             await asyncio.sleep(0.5)
         if db_page is None:
-            raise RuntimeError("点击高级检索后未进入 kns.cnki.net")
+            raise RuntimeError("点击高级检索后未进入高级检索页(kns8s/advsearch)")
         await db_page.bring_to_front()
         await wait_ready(db_page, 10000)
         logger.info("已进入高级检索页: %s", db_page.url)
@@ -367,8 +381,22 @@ class CnkiFlow(Flow):
         txt_dir.mkdir(parents=True, exist_ok=True)
         menu = await first_visible(page, S.EXPORT_MENU, timeout=10000)
         await menu.click()
-        # “导出文献”是带二级菜单的项: 先悬停展开, 再点 GB/T 7714-2025
-        lit = await first_visible(page, S.EXPORT_LIT, timeout=5000)
+        # 等“导出文献”子菜单出现; 点击没展开则改用悬停展开
+        lit = None
+        for attempt in range(3):
+            try:
+                lit = await first_visible(page, S.EXPORT_LIT, timeout=4000)
+                break
+            except LookupError:
+                if attempt == 0:
+                    logger.info("点击未展开导出菜单，改用悬停")
+                    await menu.hover()
+                else:
+                    await menu.hover()
+                    await asyncio.sleep(1)
+        if lit is None:
+            await dump_debug(page, txt_dir.parent, "export_menu", logger)
+            raise LookupError("「导出与分析」菜单点击/悬停后都没出现「导出文献」(见 _debug 快照)")
         await lit.hover()
         await asyncio.sleep(0.8)
         gbt = await first_visible(page, S.GBT_LINK, timeout=5000)

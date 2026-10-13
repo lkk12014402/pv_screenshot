@@ -118,7 +118,7 @@ tasks:
   # - name: cnki_demo
   #   site: cnki                  # 知网(独立站点, 账号在 accounts.cnki)
   #   database: cnki
-  #   # base_url: "https://c61.oversea.cnki.net/"   # 默认即此; 内网打不开可换镜像 https://oversea.cnki.net/
+  #   # base_url: "https://c61.oversea.cnki.net/"   # 默认即此; 内网打不开可换镜像 https://chn.oversea.cnki.net/
   #   compound: "68Ga / GalenVita"  # 成分名(去重/归档用)
   #   query: "SU=('镓68'+'68Ga'+'镓发生器'+'锗镓发生器'+'GalenVita'+'68Ga发生器')*('不良事件'+'不良反应'+'副作用'+'毒性'+'安全性')"
   #   date_filter:                # 对应 时间范围-发表时间 起止输入框(yyyy-mm-dd)
@@ -209,7 +209,7 @@ class TaskConfig:
     database: str = "embase"
     category: str = "医学数据库"  # chaoslib 左侧分类名
     compound: str = ""  # 成分名(界面「药物」选择; 用于万方输出目录与去重)
-    base_url: str = ""  # 站点首页地址覆盖(如知网换镜像: https://oversea.cnki.net/)
+    base_url: str = ""  # 站点首页地址覆盖(如知网换镜像: https://chn.oversea.cnki.net/)
     query: str = ""
     date_filter: DateFilterConfig = field(default_factory=DateFilterConfig)
     per_page: int = 200
