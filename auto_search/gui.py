@@ -186,7 +186,8 @@ class App:
         # ---- 日期过滤 ----
         df_frame = ttk.Frame(main)
         self.v_df_enabled = tk.BooleanVar(value=bool(df0.get("enabled", True)))
-        ttk.Checkbutton(df_frame, text="启用日期过滤", variable=self.v_df_enabled).pack(side="left")
+        self.cb_df = ttk.Checkbutton(df_frame, text="启用日期过滤", variable=self.v_df_enabled)
+        self.cb_df.pack(side="left")
         ttk.Label(df_frame, text="类型").pack(side="left", padx=(12, 2))
         self.v_df_type = ttk.Combobox(df_frame, values=list(_DATE_TYPE_LABELS.values()),
                                       state="readonly", width=26)
@@ -320,6 +321,27 @@ class App:
         # 「逐页导出CSV」复选框文案随数据库切换(万方是批量引用导出XLS)
         self.cb_csv.config(
             text="分批导出 XLS（批量引用）" if key == "wanfang" else "逐页导出 CSV")
+        self._apply_db_ui_state(key)
+
+    # 各数据库的每页条数选项与默认值(万方只支持 20/30/50)
+    _DB_PAGE_SIZES = {
+        "wanfang": (["20", "30", "50"], "50"),
+    }
+    _DEFAULT_PAGE_SIZES = (["25", "50", "100", "200"], "200")
+
+    def _apply_db_ui_state(self, key: str):
+        """随数据库切换调整界面: 每页条数选项/默认值; 万方不支持的功能置灰。"""
+        sizes, default = self._DB_PAGE_SIZES.get(key, self._DEFAULT_PAGE_SIZES)
+        cur = self.v_per_page.get()
+        self.v_per_page.config(values=sizes)
+        if cur not in sizes:
+            self.v_per_page.set(default)
+        wf = key == "wanfang"
+        # 万方: 不支持日期过滤、导出字段固定 -> 相关控件置灰
+        for w in (self.cb_df, self.v_df_type, self.v_df_start, self.v_df_end):
+            w.state(["disabled"] if wf else ["!disabled"])
+        self.v_fields.config(state="disabled" if wf else "normal")
+        self.v_fields_by.state(["disabled"] if wf else ["!disabled"])
 
     def _on_database_changed(self):
         self._update_db_hint()
