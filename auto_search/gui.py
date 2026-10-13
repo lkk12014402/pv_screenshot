@@ -528,12 +528,14 @@ class DedupDialog(tk.Toplevel):
         self.tree = ttk.Treeview(body, columns=cols, show="headings", height=14)
         self.tree.heading("idx", text="#")
         self.tree.heading("title", text="新检索文章名")
-        self.tree.heading("score", text="最佳分")
-        self.tree.heading("verdict", text="判定")
+        # 列头点击排序: 分数升降切换; 判定按 待确认>新增>重复 分组
+        self.tree.heading("score", text="最佳分 ↓", command=lambda: self._sort_by("score"))
+        self.tree.heading("verdict", text="判定 ↓", command=lambda: self._sort_by("verdict"))
         self.tree.column("idx", width=50)
         self.tree.column("title", width=520)
         self.tree.column("score", width=70)
-        self.tree.column("verdict", width=80)
+        self.tree.column("verdict", width=110)
+        self._sort_mode = "default"  # default=待确认置顶+分数降序; score_asc/score_desc/verdict
         self.tree.pack(side="left", fill="both", expand=True)
         sb = ttk.Scrollbar(body, orient="vertical", command=self.tree.yview)
         sb.pack(side="left", fill="y")
@@ -642,13 +644,34 @@ class DedupDialog(tk.Toplevel):
         self._log("匹配结果显示在下方列表；选中任意行看 Top-5 匹配，可改判或调阈值后「重新分类」")
 
     # 线程安全日志走主窗口; 匹配完成信号轮询
+    _VERDICT_ORDER = {"待确认": 0, "新增": 1, "重复": 2}
+
+    def _sort_by(self, col: str):
+        if col == "score":
+            self._sort_mode = "score_asc" if self._sort_mode == "score_desc" else "score_desc"
+        elif col == "verdict":
+            self._sort_mode = "default" if self._sort_mode != "default" else "verdict_rev"
+        self._fill_tree()
+
     def _fill_tree(self):
         for i in self.tree.get_children():
             self.tree.delete(i)
-        for i, r in enumerate(self._results, 1):
+        rows = list(enumerate(self._results))
+        if self._sort_mode == "score_desc":
+            rows.sort(key=lambda x: -x[1].best)
+        elif self._sort_mode == "score_asc":
+            rows.sort(key=lambda x: x[1].best)
+        elif self._sort_mode == "verdict_rev":  # 重复优先(看判重判得对不对)
+            rows.sort(key=lambda x: (-self._VERDICT_ORDER.get(x[1].verdict, 9), -x[1].best))
+        else:  # 默认: 待确认置顶(最需要人工), 组内分数降序
+            rows.sort(key=lambda x: (self._VERDICT_ORDER.get(x[1].verdict, 9), -x[1].best))
+        for i, r in rows:
             verdict = r.verdict + (f"·{r.hint}" if r.verdict == "待确认" and r.hint else "")
-            self.tree.insert("", "end", iid=str(i - 1), values=(
-                i, r.item["题名"][:60], f"{r.best:.1f}", verdict), tags=(r.verdict,))
+            self.tree.insert("", "end", iid=str(i), values=(
+                i + 1, r.item["题名"][:60], f"{r.best:.1f}", verdict), tags=(r.verdict,))
+        # 列头排序指示
+        self.tree.heading("score", text="最佳分 " + {"score_desc": "↓", "score_asc": "↑"}.get(self._sort_mode, "↕"))
+        self.tree.heading("verdict", text="判定 " + {"default": "待确认↑", "verdict_rev": "重复↑"}.get(self._sort_mode, "↕"))
         self._update_summary()
 
     def _update_summary(self):
