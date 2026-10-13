@@ -33,6 +33,9 @@ accounts:
     # 跳过账号密码和滑块验证(滑块被风控拦截时的推荐做法)。相对路径相对本配置文件目录。
     # 获取方法: 浏览器登录万方 -> Cookie-Editor 扩展 -> Export -> JSON -> 保存为 wanfang_cookies.json
     # cookies_file: "wanfang_cookies.json"
+  # cnki:
+  #   username: ""  # 知网账号(手机号)
+  #   password: ""  # 知网密码
 
 # ================= 浏览器 =================
 browser:
@@ -107,6 +110,27 @@ tasks:
   #   print_pdf: {enabled: true}    # 只打印第 1 页
   #   export_csv: {enabled: true}   # 万方下此开关=批量引用导出XLS
   #   # 万方不支持: date_filter / export_csv.fields 自定义字段
+
+  # ---- 知网示例（取消注释即可用）----
+  # 流程: 登录知网 -> 高级检索 -> 专业检索 -> 发表时间 -> 检索 -> 每页50条
+  #       -> 逐页[全选 -> 打印PDF -> 导出与分析->导出文献->GB/T 7714-2025->导出txt]
+  #       -> 合并 export_all.txt。结果为空也会打印结果页 PDF 留证。
+  # - name: cnki_demo
+  #   site: cnki                  # 知网(独立站点, 账号在 accounts.cnki)
+  #   database: cnki
+  #   # base_url: "https://c61.oversea.cnki.net/"   # 默认即此; 内网打不开可换镜像 https://oversea.cnki.net/
+  #   compound: "68Ga / GalenVita"  # 成分名(去重/归档用)
+  #   query: "SU=('镓68'+'68Ga'+'镓发生器'+'锗镓发生器'+'GalenVita'+'68Ga发生器')*('不良事件'+'不良反应'+'副作用'+'毒性'+'安全性')"
+  #   date_filter:                # 对应 时间范围-发表时间 起止输入框(yyyy-mm-dd)
+  #     enabled: true
+  #     type: records_added       # 知网下 type 不区分
+  #     start: "2026-05-01"
+  #     end: "2026-08-29"
+  #   per_page: 50                # 知网显示条数选项为 10/20/50
+  #   max_pages: 0
+  #   print_pdf: {enabled: true}
+  #   export_csv: {enabled: true} # 知网下此开关=逐页导出 GB/T 7714-2025 引文 txt
+  #   # 知网不支持: screenshot / export_csv.fields 自定义字段
 
   # ---- Pubmed 示例（取消注释即可用; 流程: 检索+Custom Range日期筛选+逐页打印+全量CSV） ----
   # - name: pubmed_demo
@@ -185,6 +209,7 @@ class TaskConfig:
     database: str = "embase"
     category: str = "医学数据库"  # chaoslib 左侧分类名
     compound: str = ""  # 成分名(界面「药物」选择; 用于万方输出目录与去重)
+    base_url: str = ""  # 站点首页地址覆盖(如知网换镜像: https://oversea.cnki.net/)
     query: str = ""
     date_filter: DateFilterConfig = field(default_factory=DateFilterConfig)
     per_page: int = 200
@@ -260,6 +285,7 @@ def _parse_task(raw, idx: int) -> TaskConfig:
         database=str(raw.get("database", "embase")).strip(),
         category=str(raw.get("category", "医学数据库")).strip(),
         compound=str(raw.get("compound", "")).strip(),
+        base_url=str(raw.get("base_url", "")).strip(),
         query=str(raw.get("query", "")).strip(),
         date_filter=df,
         per_page=int(raw.get("per_page", 200)),

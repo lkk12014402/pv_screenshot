@@ -120,7 +120,7 @@ class WanfangSite(SitePlugin):
     # ---------------- 登录 ----------------
 
     async def login(self, context: BrowserContext, account: AccountConfig,
-                    outdir: Path, logger: logging.Logger) -> Page:
+                    outdir: Path, logger: logging.Logger, task=None) -> Page:
         # Cookie 登录(优先): 配置了 cookies_file 就注入 cookie 跳过账号密码和滑块
         if account.cookies_file:
             return await self._login_by_cookies(context, account, outdir, logger)

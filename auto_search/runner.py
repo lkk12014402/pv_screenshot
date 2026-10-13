@@ -82,7 +82,7 @@ async def _run_task(browser, cfg: AppConfig, task, logger) -> bool:
         try:
             # 站点账号: accounts.<site> 优先(含 cookies_file 场景, 用户名为空也不回退)，缺省用主 account
             account = cfg.accounts.get(task.site) or cfg.account
-            page = await site.login(context, account, outdir, tlog)
+            page = await site.login(context, account, outdir, tlog, task=task)
             flow_page = await site.open_database(
                 page, task.database, tlog, category=task.category)
             flow = site.flows[task.database]()

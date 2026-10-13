@@ -30,7 +30,7 @@ _DB_FLOW_HINTS = {
     "embase": "流程: 检索+日期过滤+截图+逐页打印PDF+逐页导出CSV",
     "pubmed": "流程: 检索+日期筛选+打印PDF+全量CSV导出(无截图/字段勾选)",
     "wanfang": "流程: 登录+专业检索+每页50条+打印第1页PDF+分批导出XLS(500条/批)",
-    "cnki": "暂未实现自动流程，仅预填检索式",
+    "cnki": "流程: 登录+专业检索+发表时间+每页50条+逐页打印PDF+逐页导出GB/T引文TXT",
 }
 
 # 数据库 -> 站点(决定登录方式): embase/pubmed 走 chaoslib WebVPN，万方直连
@@ -48,6 +48,9 @@ def build_raw_config(base_raw: dict, v: dict) -> dict:
     wf_acc.update(username=v["wf_username"], password=v["wf_password"],
                   cookies_file=v["wf_cookies_file"])
     accounts["wanfang"] = wf_acc
+    cnki_acc = dict(accounts.get("cnki") or {})
+    cnki_acc.update(username=v["cnki_username"], password=v["cnki_password"])
+    accounts["cnki"] = cnki_acc
     raw["accounts"] = accounts
     br = dict(raw.get("browser") or {})
     br.update(headless=v["headless"], channel=v["channel"], slow_mo=v["slow_mo"])
@@ -154,6 +157,12 @@ class App:
                   foreground="#888").pack(side="left", padx=6)
         wf_ck_frame.grid(row=row, column=1, sticky="ew", pady=2); row += 1
 
+        # ---- 知网账号 ----
+        label("知网账号", row); self.v_cnki_user = ttk.Entry(main)
+        self.v_cnki_user.grid(row=row, column=1, sticky="ew", pady=2); row += 1
+        label("知网密码", row); self.v_cnki_pass = ttk.Entry(main, show="*")
+        self.v_cnki_pass.grid(row=row, column=1, sticky="ew", pady=2); row += 1
+
         # ---- 药物 ----
         label("药物", row)
         drug_frame = ttk.Frame(main)
@@ -242,7 +251,8 @@ class App:
 
         act_frame = ttk.Frame(main)
         self.v_shot = tk.BooleanVar(value=bool(ss0.get("enabled", True)))
-        ttk.Checkbutton(act_frame, text="结果页整页截图", variable=self.v_shot).pack(side="left")
+        self.cb_shot = ttk.Checkbutton(act_frame, text="结果页整页截图", variable=self.v_shot)
+        self.cb_shot.pack(side="left")
         self.v_pdf = tk.BooleanVar(value=bool(pp0.get("enabled", True)))
         ttk.Checkbutton(act_frame, text="逐页打印 PDF", variable=self.v_pdf).pack(side="left", padx=(10, 0))
         self.v_pdf_hf = tk.BooleanVar(value=bool(pp0.get("header_footer", True)))
@@ -283,6 +293,9 @@ class App:
         self.v_wf_user.insert(0, str(wf_acc0.get("username") or ""))
         self.v_wf_pass.insert(0, str(wf_acc0.get("password") or ""))
         self.v_wf_cookies.insert(0, str(wf_acc0.get("cookies_file") or ""))
+        cnki_acc0 = (self.base_raw.get("accounts") or {}).get("cnki") or {}
+        self.v_cnki_user.insert(0, str(cnki_acc0.get("username") or ""))
+        self.v_cnki_pass.insert(0, str(cnki_acc0.get("password") or ""))
         self.v_query.insert("1.0", str(task0.get("query") or ""))
         self.v_fields.insert("1.0", "\n".join(str(f) for f in (ex0.get("fields") or [])))
 
@@ -323,25 +336,35 @@ class App:
             text="分批导出 XLS（批量引用）" if key == "wanfang" else "逐页导出 CSV")
         self._apply_db_ui_state(key)
 
-    # 各数据库的每页条数选项与默认值(万方只支持 20/30/50)
+    # 各数据库的每页条数选项与默认值(万方/知网只支持部分)
     _DB_PAGE_SIZES = {
         "wanfang": (["20", "30", "50"], "50"),
+        "cnki": (["10", "20", "50"], "50"),
     }
     _DEFAULT_PAGE_SIZES = (["25", "50", "100", "200"], "200")
 
+    # 各数据库不支持的界面功能: date_filter=日期过滤, csv_fields=导出字段, screenshot=整页截图
+    _DB_UNSUPPORTED = {
+        "wanfang": {"date_filter", "csv_fields"},
+        "pubmed": {"csv_fields", "screenshot"},
+        "cnki": {"csv_fields", "screenshot"},
+    }
+
     def _apply_db_ui_state(self, key: str):
-        """随数据库切换调整界面: 每页条数选项/默认值; 万方不支持的功能置灰。"""
+        """随数据库切换调整界面: 每页条数选项/默认值; 不支持的功能置灰。"""
         sizes, default = self._DB_PAGE_SIZES.get(key, self._DEFAULT_PAGE_SIZES)
         cur = self.v_per_page.get()
         self.v_per_page.config(values=sizes)
         if cur not in sizes:
             self.v_per_page.set(default)
-        wf = key == "wanfang"
-        # 万方: 不支持日期过滤、导出字段固定 -> 相关控件置灰
+        unsupported = self._DB_UNSUPPORTED.get(key, set())
+        df_off = "date_filter" in unsupported
         for w in (self.cb_df, self.v_df_type, self.v_df_start, self.v_df_end):
-            w.state(["disabled"] if wf else ["!disabled"])
-        self.v_fields.config(state="disabled" if wf else "normal")
-        self.v_fields_by.state(["disabled"] if wf else ["!disabled"])
+            w.state(["disabled"] if df_off else ["!disabled"])
+        fields_off = "csv_fields" in unsupported
+        self.v_fields.config(state="disabled" if fields_off else "normal")
+        self.v_fields_by.state(["disabled"] if fields_off else ["!disabled"])
+        self.cb_shot.state(["disabled"] if "screenshot" in unsupported else ["!disabled"])
 
     def _on_database_changed(self):
         self._update_db_hint()
@@ -365,6 +388,8 @@ class App:
             "wf_username": self.v_wf_user.get().strip(),
             "wf_password": self.v_wf_pass.get().strip(),
             "wf_cookies_file": self.v_wf_cookies.get().strip(),
+            "cnki_username": self.v_cnki_user.get().strip(),
+            "cnki_password": self.v_cnki_pass.get().strip(),
             "database": self._db_key(),
             "compound": self.v_drug.get().strip(),
             "query": self.v_query.get("1.0", "end").strip(),

@@ -40,7 +40,7 @@ class ChaoslibSite(SitePlugin):
     }
 
     async def login(self, context: BrowserContext, account: AccountConfig,
-                    outdir: Path, logger: logging.Logger) -> Page:
+                    outdir: Path, logger: logging.Logger, task=None) -> Page:
         page = await context.new_page()
         logger.info("打开 %s", self.base_url)
         await page.goto(self.base_url, wait_until="domcontentloaded")

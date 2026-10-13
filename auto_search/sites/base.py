@@ -21,8 +21,8 @@ class SitePlugin(ABC):
 
     @abstractmethod
     async def login(self, context: BrowserContext, account: "AccountConfig",
-                    outdir: Path, logger: logging.Logger) -> Page:
-        """登录站点，返回登录后的首页 Page。"""
+                    outdir: Path, logger: logging.Logger, task=None) -> Page:
+        """登录站点，返回登录后的首页 Page。task 可选(站点镜像地址等覆盖参数用)。"""
 
     @abstractmethod
     async def open_database(self, page: Page, db_name: str,
