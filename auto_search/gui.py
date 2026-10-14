@@ -568,6 +568,8 @@ class DedupDialog(tk.Toplevel):
         self.btn_match = ttk.Button(act, text="开始匹配", command=self._start_match)
         self.btn_match.pack(side="left")
         ttk.Button(act, text="重新分类(不重算)", command=self._reclassify).pack(side="left", padx=8)
+        self.btn_annotate = ttk.Button(act, text="导出标注文件", command=self._annotate, state="disabled")
+        self.btn_annotate.pack(side="left", padx=4)
         self.btn_write = ttk.Button(act, text="写入新历史文件", command=self._write, state="disabled")
         self.btn_write.pack(side="left", padx=8)
         self.v_summary = ttk.Label(act, text="")
@@ -695,7 +697,20 @@ class DedupDialog(tk.Toplevel):
             return
         self._fill_tree()
         self.btn_write.state(["!disabled"])
+        self.btn_annotate.state(["!disabled"])
         self._log("匹配结果显示在下方列表；选中任意行看 Top-5 匹配，可改判或调阈值后「重新分类」")
+        self._annotate()  # 匹配完成即导出一次标注文件
+
+    def _annotate(self):
+        """把当前判定标注到新检索文件末列, 另存 <原名>_待处理.<原格式>。"""
+        if not self._results:
+            return
+        try:
+            out = self.dedup.annotate_new_file(
+                Path(self.v_new.get().strip()), self._results, _DialogLogger(self._log))
+            self._log(f"标注文件: {out}（末列/行末为判定：重复/待确认/新增）")
+        except Exception as e:  # noqa: BLE001
+            self._log(f"标注文件导出失败: {e}")
 
     # 线程安全日志走主窗口; 匹配完成信号轮询
     _VERDICT_ORDER = {"待确认": 0, "新增": 1, "重复": 2}

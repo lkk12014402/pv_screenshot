@@ -99,7 +99,7 @@ def load_wanfang_export(path: Path) -> list[dict]:
     try:
         for ws in wb.worksheets:
             idx: dict = {}
-            for row in ws.iter_rows(values_only=True):
+            for row_i, row in enumerate(ws.iter_rows(values_only=True)):
                 r = list(row) + [None] * 12
                 cells = [str(c).strip() for c in r if c is not None and str(c).strip()]
                 # 表头行标志: 同时出现文本「序号」和「题名」(各类型分段的表头列不同)
@@ -124,6 +124,7 @@ def load_wanfang_export(path: Path) -> list[dict]:
                     "年": cell("年") or cell("学位年度") or cell("年份") or cell("成果公布年份"),
                     "卷": cell("卷"), "期": cell("期"),
                     "页码": cell("页码"), "DOI": cell("DOI"),
+                    "_sheet": ws.title, "_row": row_i,  # 源文件位置(标注写回用)
                 })
     finally:
         wb.close()
@@ -187,7 +188,7 @@ def load_cnki_export(path: Path) -> list[dict]:
     else:
         text = raw.decode("utf-8", errors="replace")
     items = []
-    for line in text.splitlines():
+    for line_i, line in enumerate(text.splitlines()):
         line = line.strip()
         if not line or line.startswith("<<"):
             continue
@@ -215,7 +216,7 @@ def load_cnki_export(path: Path) -> list[dict]:
             "作者": m.group("authors").strip(), "题名": title,
             "刊名": source if m.group("dtype") == "J" else "",
             "年": year, "卷": "", "期": "", "页码": "", "DOI": doi,
-            "_raw": line, "_db": "知网",
+            "_raw": line, "_db": "知网", "_line": line_i,  # _line: 源文件行号(标注写回用)
         })
     return items
 
@@ -401,3 +402,92 @@ def write_new_history(src_path: Path, hist_dir: Path, compound: str,
     logger.info("本次(%s): 新检索 %d 条, 判定重复 %d, 待确认 %d, 新增写入 %d 条",
                 db_name, total_new, dup, pending, len(added))
     return out
+
+
+# ---------------- 标注新检索文件(生成 待处理 文件) ----------------
+
+def _load_workbook_tolerant(path: Path):
+    """万方导出的 xlsx 行高写的是字符串('22px'), openpyxl 直接读会崩;
+    先剥掉 sheet XML 里的 ht 属性再加载(内容不受影响)。"""
+    import zipfile
+    tmp = path.with_name(path.stem + ".cleantmp" + path.suffix)
+    with zipfile.ZipFile(path) as zin, \
+            zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+        for name in zin.namelist():
+            data = zin.read(name)
+            if name.startswith("xl/worksheets/") and name.endswith(".xml"):
+                data = re.sub(rb'\sht="[^"]*"', b"", data)
+            zout.writestr(name, data)
+    wb = load_workbook(tmp)
+    try:
+        tmp.unlink()
+    except Exception:  # noqa: BLE001
+        pass
+    return wb
+
+
+def annotate_new_file(new_path: Path, results: list[MatchResult],
+                      logger: logging.Logger) -> Path:
+    """把每条新文献的判定(重复/待确认/新增)写到源文件最后一列(末位),
+    另存为 <原文件名>_待处理.<原格式>(万方 xlsx->xlsx, 知网 txt->txt)。
+
+    返回标注文件路径。
+    """
+    out = new_path.with_name(f"{new_path.stem}_待处理{new_path.suffix}")
+    if new_path.suffix.lower() == ".txt":
+        _annotate_txt(new_path, out, results, logger)
+    else:
+        _annotate_xlsx(new_path, out, results, logger)
+    logger.info("标注文件已保存: %s", out)
+    return out
+
+
+def _annotate_xlsx(new_path: Path, out: Path, results: list[MatchResult],
+                   logger: logging.Logger) -> None:
+    """xlsx: 在每条数据行的最后一列写判定(表头行写「去重判定」)。"""
+    wb = _load_workbook_tolerant(new_path)
+    written = 0
+    # 按 (sheet, row) 定位写回
+    by_sheet: dict[str, list[MatchResult]] = {}
+    for r in results:
+        by_sheet.setdefault(r.item.get("_sheet", ""), []).append(r)
+    for ws in wb.worksheets:
+        rows = by_sheet.get(ws.title)
+        if not rows:
+            continue
+        last_col = ws.max_column + 1
+        for r in rows:
+            ws.cell(row=r.item["_row"] + 1, column=last_col, value=r.verdict)
+            written += 1
+        # 表头标注: 找该 sheet 中含「序号」「题名」的行, 在其最后一列写「去重判定」
+        for row in ws.iter_rows():
+            vals = [str(c.value).strip() if c.value is not None else "" for c in row]
+            if "序号" in vals and "题名" in vals:
+                ws.cell(row=row[0].row, column=last_col, value="去重判定")
+    wb.save(out)
+    wb.close()
+    logger.info("xlsx 标注: %d 条写判定(列: 去重判定)", written)
+
+
+def _annotate_txt(new_path: Path, out: Path, results: list[MatchResult],
+                  logger: logging.Logger) -> None:
+    """知网 txt: 每条引文行末追加「\\t判定」。"""
+    raw = new_path.read_bytes()
+    text = None
+    for enc in ("utf-8", "gb18030"):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        text = raw.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    by_line = {r.item["_line"]: r for r in results if "_line" in r.item}
+    written = 0
+    for i, r in by_line.items():
+        if 0 <= i < len(lines):
+            lines[i] = lines[i] + "\t" + r.verdict
+            written += 1
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    logger.info("txt 标注: %d 条写判定(行末追加)", written)
