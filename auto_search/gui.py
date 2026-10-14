@@ -29,7 +29,7 @@ _DATE_TYPE_VALUES = {v: k for k, v in _DATE_TYPE_LABELS.items()}
 _DB_FLOW_HINTS = {
     "embase": "流程: 检索+日期过滤+截图+逐页打印PDF+逐页导出CSV",
     "pubmed": "流程: 检索+日期筛选+打印PDF+全量CSV导出(无截图/字段勾选)",
-    "wanfang": "流程: 登录+专业检索+每页50条+打印第1页PDF+分批导出XLS(500条/批)",
+    "wanfang": "流程: 登录+专业检索+每页50条+打印第1页PDF+分批导出XLS(500条/批)。默认有头，弹滑块时手动拖一次即可",
     "cnki": "流程: 登录+专业检索+发表时间+每页50条+逐页打印PDF+逐页导出GB/T引文TXT",
 }
 
@@ -353,12 +353,15 @@ class App:
     }
 
     def _apply_db_ui_state(self, key: str):
-        """随数据库切换调整界面: 每页条数选项/默认值; 不支持的功能置灰。"""
+        """随数据库切换调整界面: 每页条数选项/默认值; 不支持的功能置灰; 万方默认有头。"""
         sizes, default = self._DB_PAGE_SIZES.get(key, self._DEFAULT_PAGE_SIZES)
         cur = self.v_per_page.get()
         self.v_per_page.config(values=sizes)
         if cur not in sizes:
             self.v_per_page.set(default)
+        # 万方默认有头模式(滑块验证需要用户手动拖拽兜底; 有头指纹也更不容易触发滑块)
+        if key == "wanfang" and self.v_headless.get():
+            self.v_headless.set(False)
         unsupported = self._DB_UNSUPPORTED.get(key, set())
         df_off = "date_filter" in unsupported
         for w in (self.cb_df, self.v_df_start, self.v_df_end):
