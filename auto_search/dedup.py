@@ -404,7 +404,7 @@ def write_new_history(src_path: Path, hist_dir: Path, compound: str,
     return out
 
 
-# ---------------- 标注新检索文件(生成 待处理 文件) ----------------
+# ---------------- 标注新检索文件(生成 已确认 文件) ----------------
 
 def _load_workbook_tolerant(path: Path):
     """万方导出的 xlsx 行高写的是字符串('22px'), openpyxl 直接读会崩;
@@ -429,11 +429,11 @@ def _load_workbook_tolerant(path: Path):
 def annotate_new_file(new_path: Path, results: list[MatchResult],
                       logger: logging.Logger) -> Path:
     """把每条新文献的判定(重复/待确认/新增)写到源文件最后一列(末位),
-    另存为 <原文件名>_待处理.<原格式>(万方 xlsx->xlsx, 知网 txt->txt)。
+    另存为 <原文件名>_已确认.<原格式>(万方 xlsx->xlsx, 知网 txt->txt)。
 
     返回标注文件路径。
     """
-    out = new_path.with_name(f"{new_path.stem}_待处理{new_path.suffix}")
+    out = new_path.with_name(f"{new_path.stem}_已确认{new_path.suffix}")
     if new_path.suffix.lower() == ".txt":
         _annotate_txt(new_path, out, results, logger)
     else:

@@ -571,7 +571,7 @@ class DedupDialog(tk.Toplevel):
         self.btn_match = ttk.Button(act, text="开始匹配", command=self._start_match)
         self.btn_match.pack(side="left")
         ttk.Button(act, text="重新分类(不重算)", command=self._reclassify).pack(side="left", padx=8)
-        self.btn_annotate = ttk.Button(act, text="导出标注文件", command=self._annotate, state="disabled")
+        self.btn_annotate = ttk.Button(act, text="导出标注文件(已确认)", command=self._annotate, state="disabled")
         self.btn_annotate.pack(side="left", padx=4)
         self.btn_write = ttk.Button(act, text="写入新历史文件", command=self._write, state="disabled")
         self.btn_write.pack(side="left", padx=8)
@@ -702,10 +702,9 @@ class DedupDialog(tk.Toplevel):
         self.btn_write.state(["!disabled"])
         self.btn_annotate.state(["!disabled"])
         self._log("匹配结果显示在下方列表；选中任意行看 Top-5 匹配，可改判或调阈值后「重新分类」")
-        self._annotate()  # 匹配完成即导出一次标注文件
 
     def _annotate(self):
-        """把当前判定标注到新检索文件末列, 另存 <原名>_待处理.<原格式>。"""
+        """把当前判定标注到新检索文件末列, 另存 <原名>_已确认.<原格式>。"""
         if not self._results:
             return
         try:
@@ -810,6 +809,7 @@ class DedupDialog(tk.Toplevel):
                 self._results, total_new=len(self._results),
                 operator=operator, db_name=self._db_name,
                 logger=_DialogLogger(self._log))
+            self._annotate()  # 同步导出一份确认后的标注文件
             messagebox.showinfo("已写入", f"新历史检索文件:\n{out}", parent=self)
         except Exception as e:  # noqa: BLE001
             messagebox.showerror("写入失败", str(e), parent=self)
