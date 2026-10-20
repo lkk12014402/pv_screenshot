@@ -28,8 +28,10 @@ RESULT_COUNT_RE = re.compile(r"共找到\s*([\d,]+)\s*条结果")
 class S:  # noqa: D101 - 选择器集中处
     # ---- 登录(c61.oversea.cnki.net 首页右侧“个人登录”面板) ----
     LOGIN_ENTRY = [
+        'div.ecp_header_personal_loginbg',   # 实测: div 带 onclick(不是 a/button)
         'a:has-text("个人登录")',
         'button:has-text("个人登录")',
+        'div:has-text("个人登录")',
     ]
     LOGIN_USER = [
         'input[placeholder*="账号"]',
@@ -305,11 +307,25 @@ class CnkiFlow(Flow):
     # ---------------- 每页条数 ----------------
 
     async def _set_page_size(self, page: Page, per_page: int, logger: logging.Logger) -> None:
-        """结果工具条右侧 “显示 N▾” 自定义下拉，选项 10/20/50。"""
+        """结果工具条右侧 “显示 N▾” 自定义下拉: #perPageDiv(.sort-default 展开 ->
+        ul.sort-list li[data-val=N])。选项 10/20/50。"""
         if not per_page:
             return
         try:
-            # 点“显示”区域的下拉
+            cur = await page.locator('#perPageDiv .sort-default span').first.inner_text(timeout=8000)
+            if cur.strip() == str(per_page):
+                logger.info("每页条数已是 %d", per_page)
+                return
+            await page.locator('#perPageDiv .sort-default').first.click()
+            await asyncio.sleep(0.8)
+            await page.locator(f'#perPageDiv ul.sort-list li[data-val="{per_page}"] a').first.click()
+            await wait_ready(page, 8000)
+            logger.info("已设置每页显示 %d 条", per_page)
+            return
+        except Exception:  # noqa: BLE001
+            pass
+        # 兜底: 老选择器(网页改版前的结构)
+        try:
             dd = await first_visible(page, [
                 'div:has-text("显示") select',
                 'select:has(option:text-is("50"))',
