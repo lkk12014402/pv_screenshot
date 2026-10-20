@@ -2,7 +2,8 @@
 
 流程（对应用户需求）：
 1. 首页右上角「登录/注册」→ 弹层 iframe(my.wanfangdata.com.cn) 填账号密码
-   - 填完可能出现阿里云滑块：自动拖拽尝试 2 次，不过则有头模式提示手动拖、无头报错
+   - 填完可能出现阿里云滑块：有头模式提示用户手动拖、无头报错(可用 cookies 文件绕开);
+     自动拖拽实现保留在 _drag_slider(默认不调用, 阿里云风控对自动轨迹基本必拒)
 2. 高级检索页 → 专业检索 → 文献类型「全部」→ 填检索式 → 检索
 3. 结果页：读总条数(span.mark-number)，URL 参数 s=50 设每页条数
 4. 只打印第 1 页 PDF（复用 sites/printing.py）
@@ -159,44 +160,42 @@ class WanfangSite(SitePlugin):
         await (await self._pick_visible(frame.locator(S.LOGIN_PWD))).fill(account.password)
         logger.info("已填入账号密码")
 
-        # 滑块 + 提交循环: 以登录结果为判定依据(验证码 DOM 状态不可靠)
-        last_outcome = ""
-        for attempt in range(1, 4):
-            pos = await self._wait_slider(page, 20)
-            if pos:
-                logger.warning("[登录] 检测到滑块验证，自动拖拽(%d/3)...", attempt)
-                await self._drag_slider(page, pos)
-                await asyncio.sleep(1)
-            await frame.evaluate("() => document.querySelector('#new_sub_tj').click()")
-            logger.info("已提交登录，等待结果...")
-            outcome = await self._wait_login_outcome(page, frame, outdir, logger)
-            if outcome == "ok":
-                logger.info("登录成功")
-                await wait_ready(page, 5000)
-                return page
-            last_outcome = outcome
-            if outcome == "captcha_fail":
-                logger.warning("[登录] 滑块校验被服务端拒绝(%d/3)，重试", attempt)
-                continue
-            break  # 密码错误/超时不再重试
-
-        # 自动多次不过: 有头模式提示手动, 无头报错
+        # 滑块: 有头模式直接等用户手动拖(不再自动拖拽尝试); 无头报错提示
+        pos = await self._wait_slider(page, 15)
         headless = getattr(context.browser, "_auto_search_headless", True)
-        if last_outcome in ("captcha_fail", "timeout") and not headless:
-            logger.warning("请在浏览器窗口中手动拖动滑块并点击「登录」(最多等 3 分钟)...")
-            outcome = await self._wait_login_outcome(page, frame, outdir, logger, timeout=180)
-            if outcome == "ok":
-                logger.info("登录成功(手动验证)")
-                await wait_ready(page, 5000)
-                return page
-        if last_outcome == "bad_cred":
+        if pos:
+            if headless:
+                await dump_debug(page, outdir, "slider_headless", logger)
+                raise RuntimeError(
+                    "万方登录出现滑块验证，无头模式下无法人工拖拽。"
+                    "请改用有头模式(界面取消勾选「无头运行」)，或用 cookies 文件登录")
+            logger.warning("检测到滑块验证，请在浏览器窗口中手动拖动滑块，拖完程序自动点「登录」(最多等 3 分钟)...")
+            solved = await self._wait_slider_solved(page, timeout_s=180)
+            if not solved:
+                await dump_debug(page, outdir, "slider_manual_timeout", logger)
+                raise RuntimeError("等待手动拖滑块超时(3 分钟)")
+
+        # 点登录
+        await frame.evaluate("() => document.querySelector('#new_sub_tj').click()")
+        logger.info("已提交登录，等待结果...")
+        outcome = await self._wait_login_outcome(page, frame, outdir, logger)
+        if outcome == "ok":
+            logger.info("登录成功")
+            await wait_ready(page, 5000)
+            return page
+        if outcome == "bad_cred":
             raise RuntimeError("登录失败：账号或密码错误，请检查 config.yaml 的 accounts.wanfang 配置")
-        if last_outcome == "captcha_fail":
-            raise RuntimeError(
-                "滑块验证多次被服务端拒绝（无头浏览器指纹易被风控）。"
-                "请改用有头模式：界面取消勾选「无头运行」或 config.yaml 设 headless: false，"
-                "届时按日志提示手动拖动滑块即可")
-        raise RuntimeError("登录超时：长时间未确认登录成功，请检查网络或改有头模式重试")
+        raise RuntimeError("登录超时：长时间未确认登录成功，请检查网络或 _debug 快照")
+
+    async def _wait_slider_solved(self, page: Page, timeout_s: int = 180) -> bool:
+        """等用户手动把滑块拖过(滑块消失或 class 含 ok)。"""
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            state = await page.evaluate(_SLIDER_STATE_JS)
+            if not state or "ok" in state.get("cls", "") or state.get("cap"):
+                return True
+            await asyncio.sleep(1)
+        return False
 
     async def _login_by_cookies(self, context: BrowserContext, account: AccountConfig,
                                 outdir: Path, logger: logging.Logger) -> Page:
@@ -380,10 +379,9 @@ class WanfangSite(SitePlugin):
     async def solve_slider(self, page: Page, logger: logging.Logger,
                            headless: bool | None, outdir: Path | None,
                            wait_appear_s: int = 25, context: str = "") -> bool:
-        """处理阿里云滑块: 自动拖 2 次; 不过则有头模式等手动, 无头报错。
+        """处理阿里云滑块: 有头模式等用户手动拖, 无头报错(不再自动拖拽尝试)。
 
         headless=None 表示从浏览器对象读取(verify页场景)。
-        注意: 拖拽失败后滑块会短暂消失再重置, 「找不到」不等于「已通过」, 需连续确认。
         """
         # 等滑块出现(可能根本不出现)
         pos = await self._wait_slider(page, wait_appear_s)
@@ -391,52 +389,23 @@ class WanfangSite(SitePlugin):
             logger.info("[%s] 未出现滑块，继续", context)
             return True
 
-        passed = False
-        for attempt in range(1, 3):
-            logger.warning("[%s] 检测到滑块验证，自动拖拽尝试(%d/2)...", context, attempt)
-            if await self._drag_slider(page, pos):
-                passed = True
-                break
-            logger.warning("[%s] 第 %d 次拖拽未通过", context, attempt)
-            if attempt < 2:
-                # 等滑块重置后重新出现; 15 秒内不再出现视为已通过
-                pos = await self._wait_slider(page, 15)
-                if not pos:
-                    passed = True
-                    break
-        if passed:
-            logger.info("[%s] 滑块验证通过", context)
-            return True
-
-        # 自动不过: 有头等手动, 无头报错
         if headless is None:
             headless = getattr(page.context.browser, "_auto_search_headless", True)
         if headless:
             if outdir:
-                await dump_debug(page, outdir, "slider_failed", logger)
+                await dump_debug(page, outdir, "slider_headless", logger)
             raise RuntimeError(
-                f"[{context}] 滑块自动验证未通过（阿里云风控对无头浏览器较严格）。"
+                f"[{context}] 出现滑块验证，无头模式下无法人工拖拽。"
                 "请改用有头模式运行（界面取消勾选「无头运行」或 config.yaml 设 headless: false），"
                 "届时按日志提示手动拖动一次即可")
-        logger.warning("[%s] 自动拖拽未通过，请在浏览器窗口中手动拖动滑块（最多等 3 分钟）...", context)
-        for _ in range(90):
-            state = await page.evaluate(_SLIDER_STATE_JS)
-            if not state or "ok" in state.get("cls", "") or state.get("cap"):
-                logger.info("[%s] 手动验证完成", context)
-                return True
-            await asyncio.sleep(2)
+        logger.warning("[%s] 出现滑块验证，请在浏览器窗口中手动拖动滑块（最多等 3 分钟）...", context)
+        solved = await self._wait_slider_solved(page, timeout_s=180)
+        if solved:
+            logger.info("[%s] 手动验证完成", context)
+            return True
         raise RuntimeError(f"[{context}] 等待手动滑块超时(3分钟)")
 
-    async def _wait_slider(self, page: Page, timeout_s: float) -> dict | None:
-        """等滑块出现，返回其页面坐标；超时未出现返回 None。"""
-        deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline:
-            pos = await page.evaluate(_FIND_SLIDER_JS)
-            if pos:
-                return pos
-            await asyncio.sleep(0.5)
-        return None
-
+    # 保留: 自动拖拽实现(默认不再调用, 阿里云风控对自动轨迹基本必拒, 仅留作参考)
     async def _drag_slider(self, page: Page, pos: dict) -> bool:
         """按给定坐标执行一次拟人拖拽，返回是否通过。"""
         hx, hy, delta = pos["x"], pos["y"], pos["delta"]
