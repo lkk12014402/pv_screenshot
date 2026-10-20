@@ -129,7 +129,7 @@ tasks:
   #   per_page: 50                # 知网显示条数选项为 10/20/50
   #   max_pages: 0
   #   print_pdf: {enabled: true}
-  #   export_csv: {enabled: true} # 知网下此开关=逐页导出 GB/T 7714-2025 引文 txt
+  #   export_csv: {enabled: true} # 知网下此开关=逐页全选后一次性导出 GB/T 7714-2025 引文 txt
   #   # 知网不支持: screenshot / export_csv.fields 自定义字段
 
   # ---- Pubmed 示例（取消注释即可用; 流程: 检索+Custom Range日期筛选+逐页打印+全量CSV） ----
