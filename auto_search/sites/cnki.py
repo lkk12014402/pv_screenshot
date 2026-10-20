@@ -278,6 +278,14 @@ class CnkiFlow(Flow):
             await asyncio.sleep(0.5)
 
         # 点“检索”(input.search-btn; 联想下拉/遮挡时点不动, 退 JS click)
+        # OA出版/网络首发 等复选框保持不勾(若被误勾/页面默认勾选, 强制取消)
+        await page.evaluate(
+            """() => {
+                for (const name of ['OA出版', '网络首发']) {
+                    const cb = document.querySelector(`input[name="${name}"]`);
+                    if (cb && cb.checked) cb.click();
+                }
+            }""")
         btn = await first_visible(page, S.SEARCH_BTN, timeout=10000)
         try:
             await btn.click(timeout=5000)
