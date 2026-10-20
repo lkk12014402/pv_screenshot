@@ -1,7 +1,7 @@
 """知网 (c61.oversea.cnki.net -> kns.cnki.net)：登录 + 专业检索流程。
 
 流程: 个人登录 -> 高级检索 -> 专业检索 -> 填检索式+发表时间 -> 检索 ->
-显示条数 -> 逐页[全选 -> 打印PDF -> 导出与分析->导出文献->GB/T 7714-2025->导出txt]。
+显示条数 -> 逐页[全选 -> 打印PDF], 全部页选完后一次性导出(GB/T 7714-2025 -> export_all.txt)。
 
 注意: 结果为空(暂无数据)时也打印结果页 PDF(留证)，只跳过导出。
 选择器集中在类 S 中；失败时输出目录 _debug/ 有截图和 HTML 可对照。
@@ -227,20 +227,27 @@ class CnkiFlow(Flow):
                 total_pages = min(total_pages, task.max_pages)
             logger.info("检索结果 %s 条, 共 %d 页", count, total_pages)
 
+            # 先清除可能的遗留勾选, 再改显示条数(改条数后勾选状态可能重置), 再逐页全选
+            await self._clear_selection(page, logger)
             await self._set_page_size(page, task.per_page, logger)
 
             for i in range(1, total_pages + 1):
                 logger.info("处理第 %d/%d 页", i, total_pages)
-                await self._select_all(page, logger)
+                await self._select_all(page, logger)  # 全选本页(知网勾选跨页累计)
                 if task.print_pdf.enabled:
                     await _shared_print_page(page, task, outdir / "pdf", i, logger, headless)
-                if task.export_csv.enabled and count > 0:
-                    await self._export_page(page, task, outdir / "txt", i, logger)
                 if i < total_pages:
                     await self._next_page(page, logger)
 
+            # 所有页都全选完后, 一次性导出(每页导出会因勾选累计而重复)
             if task.export_csv.enabled and count > 0:
-                self._merge_txt(outdir / "txt", logger)
+                # 日志打出累计已选数, 便于核对是否 = 结果总数
+                try:
+                    sel_txt = await page.locator('#selectCount').first.inner_text(timeout=3000)
+                    logger.info("全部 %d 页已选完(累计已选 %s 条)，一次性导出", total_pages, sel_txt.strip())
+                except Exception:  # noqa: BLE001
+                    logger.info("全部 %d 页已选完，一次性导出", total_pages)
+                await self._export_page(page, task, outdir / "txt", 0, logger)
         except Exception:
             await dump_debug(page, outdir, "error", logger)
             raise
@@ -257,6 +264,9 @@ class CnkiFlow(Flow):
         # 填检索式
         box = await first_visible(page, S.QUERY_INPUT, timeout=20000)
         await fill_input_smart(box, task.query)
+        # 填完后输入法的联想下拉可能盖住「检索」按钮, 先 Escape 收起
+        await page.keyboard.press("Escape")
+        await asyncio.sleep(0.5)
 
         # 填发表时间范围
         if task.date_filter.enabled:
@@ -264,10 +274,16 @@ class CnkiFlow(Flow):
             await fill_input_smart(start, task.date_filter.start)
             end = await first_visible(page, S.DATE_END, timeout=10000)
             await fill_input_smart(end, task.date_filter.end)
+            await page.keyboard.press("Escape")
+            await asyncio.sleep(0.5)
 
-        # 点“检索”
+        # 点“检索”(input.search-btn; 联想下拉/遮挡时点不动, 退 JS click)
         btn = await first_visible(page, S.SEARCH_BTN, timeout=10000)
-        await btn.click()
+        try:
+            await btn.click(timeout=5000)
+        except Exception:  # noqa: BLE001
+            logger.warning("检索按钮普通点击失败，改用 JS 点击")
+            await btn.evaluate("(el) => el.click()")
         # 等结果区出现: “共找到 N 条结果” 或 “暂无数据”
         try:
             await page.wait_for_function(
@@ -350,18 +366,22 @@ class CnkiFlow(Flow):
 
     # ---------------- 全选 / 翻页 ----------------
 
-    async def _select_all(self, page: Page, logger: logging.Logger) -> None:
-        """勾选工具条“全选”(选中本页全部)。打印和导出前必须调用。
-
-        知网翻页后已选会累计保留，先点“清除”再全选，避免跨页重复导出。
-        """
+    async def _clear_selection(self, page: Page, logger: logging.Logger) -> None:
+        """点工具条「清除」(清空已选; 翻页后已选会累计保留, 全选前都要先清)。"""
         try:
             clear = page.get_by_text(re.compile(r"^清除$")).first
             if await clear.is_visible():
                 await clear.click(timeout=2000)
                 await asyncio.sleep(0.5)
+                logger.info("已点「清除」")
         except Exception:  # noqa: BLE001
             pass
+
+    async def _select_all(self, page: Page, logger: logging.Logger) -> None:
+        """勾选工具条“全选”(选中本页全部)。打印和导出前调用, 逐页都要点。
+
+        「清除」只在结果刚出来时点一次(run 里), 此处不再重复。
+        """
         for sel in S.SELECT_ALL:
             try:
                 loc = page.locator(sel).first
@@ -442,7 +462,8 @@ class CnkiFlow(Flow):
         async with exp_page.expect_download(timeout=180000) as dl_info:
             await btn.click()
         download = await dl_info.value
-        path = txt_dir / f"page_{idx:03d}.txt"
+        # 一次性导出(全部已选) -> export_all.txt; 逐页导出(旧模式) -> page_NNN.txt
+        path = txt_dir / ("export_all.txt" if idx == 0 else f"page_{idx:03d}.txt")
         await download.save_as(str(path))
         logger.info("已保存 %s", path)
 
@@ -453,20 +474,6 @@ class CnkiFlow(Flow):
             except Exception:  # noqa: BLE001
                 pass
             await page.bring_to_front()
-
-    # ---------------- txt 合并 ----------------
-
-    def _merge_txt(self, txt_dir: Path, logger: logging.Logger) -> None:
-        """把逐页导出的 page_*.txt 合并为 export_all.txt。"""
-        files = sorted(txt_dir.glob("page_*.txt"))
-        if not files:
-            return
-        out = txt_dir / "export_all.txt"
-        with open(out, "w", encoding="utf-8") as w:
-            for f in files:
-                w.write(f.read_text(encoding="utf-8", errors="replace"))
-                w.write("\n")
-        logger.info("已合并 %d 个 TXT -> %s", len(files), out)
 
 
 # 注册流程（放末尾避免与类定义的相互引用）
