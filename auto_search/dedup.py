@@ -5,8 +5,8 @@
   embase去重后数量 | 知网检索数量 | 知网去重后数量 | 万方检索数量 | 万方去重后数量 | 检索时间段
 - Sheet2 明细: 日期 | 数据库 | 化合物 | 完整文献名称 | 文章名 | 结果 | 人员 | 备注
 
-匹配方式: 文章名 RapidFuzz 模糊匹配, 范围限定在 同化合物(成分), 不限数据库
-(同一文献可能同时被万方/知网/Pubmed 收录, 跨库重复也要认出来; Top-5 里带数据库来源)。
+匹配方式: 文章名 RapidFuzz 模糊匹配, 范围为历史文件全部记录(不限数据库、不限
+化合物——同一文献可能被不同库/不同成分的检索都命中过); Top-5 里带数据库来源。
 判定: score >= hi → 重复; lo <= score < hi → 待确认(界面逐条 double confirm);
 score < lo → 新增。用户确认后的新增条目追加进 Sheet2, 并在 Sheet1 追加一行台账,
 另存为 histories/ 下的新日期文件(不覆盖旧文件, 增量更新)。
@@ -284,35 +284,28 @@ def match_items(new_items: list[dict], sheet2_rows: list[list], compound: str,
                 logger: logging.Logger | None = None) -> list[MatchResult]:
     """把新检索条目与历史 Sheet2 比对。
 
-    范围: 同化合物, 不限数据库(同一文献可能同时被万方/知网/Pubmed 收录,
-    跨库重复也要能认出来)。top5 里带历史条目的数据库来源。
+    范围: 全部历史记录, 不限数据库也不限化合物(同一文献可能被不同库/不同成分
+    的检索都命中过)。化合物仅用于写入台账。top5 里带历史条目的数据库来源。
     """
-    # ---- 旧逻辑备份: 只匹配同数据库(万方) ----
-    # db_n = db.lower()
+    # ---- 旧逻辑备份: 只匹配同数据库(万方) + 同化合物 ----
+    # db_n = db.lower(); cp_n = norm_compound(compound)
     # for r in sheet2_rows[1:]:
-    #     if len(r) < 5: continue
     #     if str(r[1] or "").strip().lower() != db_n: continue
-    #     if cp_n and norm_compound(...) != cp_n: continue
+    #     if cp_n and norm_compound(str(r[2] or "")) != cp_n: continue
     #     hist.append((norm_title, title, date))
-    # -----------------------------------------
-    cp_n = norm_compound(compound)
+    # ---------------------------------------------------------
     hist = []  # (norm_title, raw_title, date_str, db_name)
-    db_counts: dict[str, int] = {}
     for r in sheet2_rows[1:]:
         if len(r) < 5:
-            continue
-        if cp_n and norm_compound(str(r[2] or "")) != cp_n:
             continue
         title = str(r[4] or "").strip()
         if title:
             db_name = str(r[1] or "").strip()
             hist.append((norm_text(title), title, str(r[0] or "")[:10], db_name))
-            db_counts[db_name] = db_counts.get(db_name, 0) + 1
     if logger:
-        logger.info("历史匹配范围: 化合物=%s(不限数据库) -> %d 条 %s",
-                    compound, len(hist), db_counts)
+        logger.info("历史匹配范围: 全部记录(不限库/成分) -> %d 条", len(hist))
     if not hist and logger:
-        logger.warning("历史文件里没有该化合物的记录, 全部按待确认处理")
+        logger.warning("历史文件为空, 全部按待确认处理")
 
     choices = [h[0] for h in hist]
     results: list[MatchResult] = []
@@ -333,7 +326,8 @@ def match_items(new_items: list[dict], sheet2_rows: list[list], compound: str,
 # ---------------- 匹配结果缓存(阈值调整后免重算) ----------------
 
 def _cache_meta(new_path: Path, hist_path: Path, compound: str) -> dict:
-    return {"new": str(new_path), "new_mtime": new_path.stat().st_mtime,
+    return {"v": 2,  # 匹配逻辑版本(改匹配范围/规则时递增, 使旧缓存失效)
+            "new": str(new_path), "new_mtime": new_path.stat().st_mtime,
             "hist": str(hist_path), "hist_mtime": hist_path.stat().st_mtime,
             "compound": compound}
 
