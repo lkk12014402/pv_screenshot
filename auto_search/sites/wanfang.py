@@ -187,6 +187,16 @@ class WanfangSite(SitePlugin):
             raise RuntimeError("登录失败：账号或密码错误，请检查 config.yaml 的 accounts.wanfang 配置")
         raise RuntimeError("登录超时：长时间未确认登录成功，请检查网络或 _debug 快照")
 
+    async def _wait_slider(self, page: Page, timeout_s: float) -> dict | None:
+        """等滑块出现，返回其页面坐标；超时未出现返回 None。"""
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            pos = await page.evaluate(_FIND_SLIDER_JS)
+            if pos:
+                return pos
+            await asyncio.sleep(0.5)
+        return None
+
     async def _wait_slider_solved(self, page: Page, timeout_s: int = 180) -> bool:
         """等用户手动把滑块拖过(滑块消失或 class 含 ok)。"""
         deadline = time.monotonic() + timeout_s
