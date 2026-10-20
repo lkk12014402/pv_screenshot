@@ -30,7 +30,7 @@ _DB_FLOW_HINTS = {
     "embase": "流程: 检索+日期过滤+截图+逐页打印PDF+逐页导出CSV",
     "pubmed": "流程: 检索+日期筛选+打印PDF+全量CSV导出(无截图/字段勾选)",
     "wanfang": "流程: 登录+专业检索+每页50条+打印第1页PDF+分批导出XLS(500条/批)。默认有头，弹滑块时手动拖一次即可",
-    "cnki": "流程: 登录+专业检索+发表时间+每页50条+逐页打印PDF+逐页导出GB/T引文TXT",
+    "cnki": "流程: 登录+专业检索+发表时间+每页50条+逐页打印PDF+逐页导出GB/T引文TXT。默认有头",
 }
 
 # 数据库 -> 站点(决定登录方式): embase/pubmed 走 chaoslib WebVPN，万方直连
@@ -71,7 +71,7 @@ def build_raw_config(base_raw: dict, v: dict) -> dict:
     ex.update(enabled=v["csv_enabled"], fields_by=v["csv_fields_by"],
               fields=[f for f in v["csv_fields"] if f])
     t.update(
-        name=t.get("name") or "embase_task",
+        name=v["database"],  # 任务名跟当前数据库走(避免沿用配置里旧库的名字, 如知网跑出 embase_*)
         site=_DB_SITE.get(v["database"], t.get("site") or "chaoslib"),
         database=v["database"],
         compound=v["compound"],
@@ -359,8 +359,8 @@ class App:
         self.v_per_page.config(values=sizes)
         if cur not in sizes:
             self.v_per_page.set(default)
-        # 万方默认有头模式(滑块验证需要用户手动拖拽兜底; 有头指纹也更不容易触发滑块)
-        if key == "wanfang" and self.v_headless.get():
+        # 万方/知网默认有头模式(滑块验证需要用户手动拖拽兜底; 有头指纹也更不容易触发滑块)
+        if key in ("wanfang", "cnki") and self.v_headless.get():
             self.v_headless.set(False)
         unsupported = self._DB_UNSUPPORTED.get(key, set())
         df_off = "date_filter" in unsupported
