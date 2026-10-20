@@ -22,15 +22,15 @@ def _safe_name(name: str) -> str:
 def _task_outdir(cfg: AppConfig, task, task_name: str, attempt: int) -> Path:
     """任务输出目录。
 
-    万方且有成分名时: output/YYYYMMDD/成分名/wanfang_HHMMSS（便于按日期+成分归档、
+    万方/知网且有成分名时: output/YYYYMMDD/成分名/库名_HHMMSS（便于按日期+成分归档、
     给去重模块挑选）；其他情况沿用 output/任务名_时间戳。
     """
     stamp = time.strftime("%Y%m%d_%H%M%S")
     suffix = "" if attempt == 1 else f"_retry{attempt}"
-    if task.site == "wanfang" and task.compound:
+    if task.site in ("wanfang", "cnki") and task.compound:
         day = time.strftime("%Y%m%d")
         hm = time.strftime("%H%M%S")
-        return cfg.output_dir / day / _safe_name(task.compound) / f"wanfang_{hm}{suffix}"
+        return cfg.output_dir / day / _safe_name(task.compound) / f"{task.site}_{hm}{suffix}"
     return cfg.output_dir / f"{task_name}_{stamp}{suffix}"
 
 
